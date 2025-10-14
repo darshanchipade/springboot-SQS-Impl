@@ -1,0 +1,97 @@
+{
+  "defaultContext": {
+    "author": "SystemDefault",
+    "version": "1",
+    "description": "Default context applied when no specific rules match.",
+    "source": "default",
+    "timestamp": "2025-07-08T12:00:00Z"
+  },
+  "contextRules": [
+    {
+      "priority": 1,
+      "ruleName": "Video Header Section Headline",
+      "matchCriteria": {
+        "pathContains": "/content/dam/applecom-cms/live/en_US/ipad/content/common/lob/ipad",
+        "modelIs": "markdown-inline-copy"
+      },
+      "context": {
+        "sectionType": "Video-Header-Section",
+        "geoTargeting": ["US"],
+        "textType": "markdown",
+        "categories": "applecom-cms:categories/26th_march_legal"
+      }
+    },
+    {
+      "priority": 2,
+      "ruleName": "Video Header Section Headline-Inline",
+      "matchCriteria": {
+        "pathContains": "/content/dam/applecom-cms/live/en_US/ipad/content/test/inline-copy",
+        "modelIs": "markdown-inline-copy"
+      },
+      "context": {
+        "sectionType": "Video-Header-Section-Inline",
+        "textType": "markdown",
+        "categories": "applecom-cms:categories/26th_march_legal/inline"
+      }
+    },
+
+    {
+      "priority": 3,
+      "ruleName": "Video Header Section Statement",
+      "matchCriteria": {
+        "pathContains": "/content/dam/applecom-cms/live/en_US/ipad/content/ipad-family/video-header-section/statement",
+        "modelIs": "markdown-inline-copy"
+      },
+      "context": {
+        "sectionType": "Statement",
+        "geoTargeting": ["JP","TN"],
+        "Title": "Context for Statement"
+      }
+    },
+    {
+      "priority": 4,
+      "ruleName": "Analytics Video Header Section",
+      "matchCriteria": {
+        "pathContains": "/content/dam/applecom-cms/live/en_US/ipad/composition/ipad-family-items/video-header-section-items/ac-section-engagement",
+        "modelIs": "analytics"
+      },
+      "context": {
+        "sectionType": "horizontal-banner-card-items Analytics Next",
+        "Title": "Analytics data-analytics-section-engagement"
+      }
+    },{
+      "priority": 5,
+      "ruleName": "S3 bucket Education Headline",
+      "matchCriteria": {
+        "pathContains": "/content/dam/applecom-cms/live/en_US/ipad/content/ipad-family/icon-card-section/education/headline",
+        "modelIs": "markdown-inline-copy"
+      },
+      "context": {
+        "sectionType": "S3 Headline",
+        "Title": "iPad withe Education pricing"
+      }
+    },{
+      "priority": 6,
+      "ruleName": "S3 Bucket Body copy",
+      "matchCriteria": {
+        "pathContains": "/content/dam/applecom-cms/live/en_US/ipad/content/ipad-family/icon-card-section/education/body-copy",
+        "modelIs": "markdown-inline-copy"
+      },
+      "context": {
+        "sectionType": "S3 Body copy",
+        "Title": "College Student and Educator"
+      }
+    },{
+      "priority": 7,
+      "ruleName": "API Call Pencil",
+      "matchCriteria": {
+        "pathContains": "/content/dam/applecom-cms/live/en_US/ipad/content/ipad-family/icon-card-section/headlinepencil",
+        "modelIs": "markdown-inline-copy"
+      },
+      "context": {
+        "sectionType": "API Headline Pencil",
+        "Title": "Apple Pencil"
+      }
+    }
+  ]
+}

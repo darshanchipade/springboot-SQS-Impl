@@ -1,0 +1,10 @@
+type Query {
+    search(query: String!, original_field_name:String,limit: Int = 10, tags: [String], keywords: [String], contextPath: [String], contextValue: String): [ContentChunk]
+}
+
+type ContentChunk {
+    id: ID!
+    chunkText: String
+    sourceField: String
+    sectionPath: String
+}
