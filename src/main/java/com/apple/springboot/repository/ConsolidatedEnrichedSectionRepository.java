@@ -11,7 +11,9 @@ import java.util.UUID;
 
 @Repository
 public interface ConsolidatedEnrichedSectionRepository extends JpaRepository<ConsolidatedEnrichedSection, UUID>, ConsolidatedEnrichedSectionRepositoryCustom {
-    boolean existsBySectionUriAndSectionPathAndCleansedTextAndVersion(String sectionUri, String sectionPath, String cleansedText, Integer version);
+   boolean existsBySectionUriAndSectionPathAndCleansedTextAndVersion(String sectionUri, String sectionPath, String cleansedText, Integer version);
+
+
     //boolean existsBySectionUriAndSectionPathAndCleansedText(String sectionUri, String sectionPath, String cleansedText);
     boolean existsBySectionUriAndSectionPathAndOriginalFieldNameAndCleansedTextAndVersion(String sectionUri, String sectionPath, String originalFieldName, String cleansedText, Integer version);
     Optional<ConsolidatedEnrichedSection> findBySectionPathAndOriginalFieldName(String sectionPath, String originalFieldName);
