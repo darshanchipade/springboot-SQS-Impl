@@ -8,7 +8,6 @@ import com.apple.springboot.repository.ContentHashRepository;
 import com.apple.springboot.repository.EnrichedContentElementRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -27,9 +26,6 @@ public class ConsolidatedSectionService {
     private final ContentHashRepository contentHashRepository;
     private static final String USAGE_REF_DELIM = " ::ref:: ";
 
-    @Value("${app.consolidation.deduplicate:false}")
-    private boolean deduplicateConsolidated;
-
     public ConsolidatedSectionService(EnrichedContentElementRepository enrichedRepo,
                                       ConsolidatedEnrichedSectionRepository consolidatedRepo,
                                       ContentHashRepository contentHashRepository) {
@@ -43,47 +39,38 @@ public class ConsolidatedSectionService {
         List<EnrichedContentElement> enrichedItems = enrichedRepo.findAllByCleansedDataId(cleansedData.getId());
         logger.info("Found {} enriched items for CleansedDataStore ID: {} to consolidate.", enrichedItems.size(), cleansedData.getId());
 
-        int savedCount = 0;
-        int skippedNull = 0;
-        int skippedExists = 0;
-
         for (EnrichedContentElement item : enrichedItems) {
             if (item.getItemSourcePath() == null || item.getCleansedText() == null) {
-                skippedNull++;
                 logger.warn("Skipping enriched item ID {} due to null itemSourcePath or cleansedText.", item.getId());
                 continue;
             }
-            String usagePath = extractUsagePath(item); // may be "container ::ref:: fragment" or just a single path
+            String usagePath = extractUsagePath(item);
             String[] split = splitUsagePath(usagePath);
-            String sectionPath = split[0];   // container/placement
-            String sectionUri  = split[1];   // fragment/canonical (where the copy lives)
+            String sectionPath = split[0];
+            String sectionUri  = split[1];
 
             if (sectionPath == null) sectionPath = item.getItemSourcePath();
             if (sectionUri  == null) sectionUri  = item.getItemSourcePath();
 
-            boolean exists = false;
-            if (deduplicateConsolidated) {
-                // Use a stricter existence check to avoid collapsing different fields with same text
-                exists = consolidatedRepo.existsBySectionUriAndSectionPathAndOriginalFieldNameAndCleansedTextAndVersion(
-                        sectionUri, sectionPath, item.getItemOriginalFieldName(), item.getCleansedText(), cleansedData.getVersion());
-            }
+            boolean exists = consolidatedRepo.existsBySectionUriAndSectionPathAndCleansedTextAndVersion(
+                    sectionUri, sectionPath, item.getCleansedText(), cleansedData.getVersion());
 
             if (!exists) {
                 ConsolidatedEnrichedSection section = new ConsolidatedEnrichedSection();
                 section.setCleansedDataId(cleansedData.getId());
                 section.setVersion(cleansedData.getVersion());
-                section.setSourceUri(item.getSourceUri());           // file/source that produced this
-                section.setSectionPath(sectionPath);                 // container
-                section.setSectionUri(sectionUri);                   // fragment
+                section.setSourceUri(item.getSourceUri());
+                section.setSectionPath(sectionPath);
+                section.setSectionUri(sectionUri);
                 section.setOriginalFieldName(item.getItemOriginalFieldName());
                 section.setCleansedText(item.getCleansedText());
-                String usagePathLookup = usagePath;
+
+                // Prefer hash keyed by usagePath; fall back to legacy two-key lookup if absent
                 contentHashRepository
-                        .findBySourcePathAndItemTypeAndUsagePath(
-                                item.getItemSourcePath(),
-                                item.getItemOriginalFieldName(),
-                                usagePathLookup)
+                        .findBySourcePathAndItemTypeAndUsagePath(item.getItemSourcePath(), item.getItemOriginalFieldName(), usagePath)
+                        .or(() -> contentHashRepository.findBySourcePathAndItemType(item.getItemSourcePath(), item.getItemOriginalFieldName()))
                         .ifPresent(contentHash -> section.setContentHash(contentHash.getContentHash()));
+
                 section.setSummary(item.getSummary());
                 section.setClassification(item.getClassification());
                 section.setKeywords(item.getKeywords());
@@ -97,14 +84,11 @@ public class ConsolidatedSectionService {
                 section.setStatus(item.getStatus());
 
                 consolidatedRepo.save(section);
-                savedCount++;
+                logger.info("Saved new ConsolidatedEnrichedSection ID {} from EnrichedContentElement ID {}", section.getId(), item.getId());
             } else {
-                skippedExists++;
-                logger.debug("Skipping existing consolidated record for sectionUri='{}', sectionPath='{}', version={}, itemId={}", sectionUri, sectionPath, cleansedData.getVersion(), item.getId());
+                logger.info("ConsolidatedEnrichedSection already exists for itemSourcePath '{}' and cleansedText snippet. Skipping save.", item.getItemSourcePath());
             }
         }
-        logger.info("Consolidation summary for CleansedDataStore {}: enriched={}, saved={}, skippedExists={}, skippedNull={}",
-                cleansedData.getId(), enrichedItems.size(), savedCount, skippedExists, skippedNull);
     }
 
     @Transactional(readOnly = true)
