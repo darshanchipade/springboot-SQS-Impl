@@ -26,7 +26,6 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.nio.charset.StandardCharsets;
-
 @Service
 public class DataIngestionService {
 
@@ -38,16 +37,14 @@ public class DataIngestionService {
 
     // Treat these as extractable content fields
     private static final Set<String> CONTENT_FIELD_KEYS = Set.of("copy", "disclaimers", "text", "url");
-
     private static final Pattern LOCALE_PATTERN = Pattern.compile("(?<=/)([a-z]{2})[-_]([A-Z]{2})(?=/|$)");
     private static final String USAGE_REF_DELIM = " ::ref:: ";
-
     private static final Map<String, String> EVENT_KEYWORDS = Map.of(
             "valentine", "Valentine day",
             "father's day", "Fathers day",
             "tax", "Tax day",
             "christmas", "Christmas",
-            "mothers", "Mothers day"
+            "mothers","Mothers day"
     );
 
     private final CleansedDataStoreRepository cleansedDataStoreRepository;
@@ -77,10 +74,13 @@ public class DataIngestionService {
 
     // Copy cleansing patterns
     private static final Pattern NBSP_PATTERN = Pattern.compile("\\{%nbsp%\\}");
+    private static final Pattern SOSUMI_PATTERN = Pattern.compile("\\{%sosumi type=\"[^\"]+\" metadata=\"\\d+\"%\\}");
     private static final Pattern BR_PATTERN = Pattern.compile("\\{%br%\\}");
     private static final Pattern URL_PATTERN = Pattern.compile(":\\s*\\[[^\\]]+\\]\\(\\{%url metadata=\"\\d+\" destination-type=\"[^\"]+\"%\\}\\)");
+    // private static final Pattern WJ_PATTERN = Pattern.compile("\\(\\{%wj%\\}\\)");
     private static final Pattern NESTED_URL_PATTERN = Pattern.compile(":\\[\\s*:\\[[^\\]]+\\]\\(\\{%url metadata=\"\\d+\" destination-type=\"[^\"]+\"%\\}\\)\\]\\(\\{%wj%\\}\\)");
     private static final Pattern METADATA_PATTERN = Pattern.compile("\\{% metadata=\"\\d+\" %\\}");
+
 
     /**
      * Constructs the service with required repositories and config values.
@@ -114,7 +114,6 @@ public class DataIngestionService {
             this.fileKey = fileKey;
         }
     }
-
     private S3ObjectDetails parseS3Uri(String s3Uri) throws IllegalArgumentException {
         if (s3Uri == null || !s3Uri.startsWith("s3://")) {
             throw new IllegalArgumentException("Invalid S3 URI format: Must start with s3://. Received: " + s3Uri);
@@ -147,20 +146,23 @@ public class DataIngestionService {
             return ingestAndCleanseSingleFile(this.jsonFilePath);
         } catch (IOException | RuntimeException e) {
             logger.error("Error processing default jsonFilePath '{}': {}. Creating error record.", this.jsonFilePath, e.getMessage(), e);
-            String sourceUri = (!this.jsonFilePath.startsWith("s3://") && !this.jsonFilePath.startsWith("classpath:"))
-                    ? "classpath:" + this.jsonFilePath
-                    : this.jsonFilePath;
+            String sourceUri;
+            if (!this.jsonFilePath.startsWith("s3://") && !this.jsonFilePath.startsWith("classpath:")) {
+                sourceUri = "classpath:" + this.jsonFilePath;
+            } else {
+                sourceUri = this.jsonFilePath;
+            }
             String finalSourceUri = sourceUri;
             RawDataStore rawData = rawDataStoreRepository.findBySourceUri(finalSourceUri).orElseGet(() -> {
                 RawDataStore newRawData = new RawDataStore();
                 newRawData.setSourceUri(finalSourceUri);
                 return newRawData;
             });
-            if (rawData.getReceivedAt() == null) rawData.setReceivedAt(OffsetDateTime.now());
+            if(rawData.getReceivedAt() == null) rawData.setReceivedAt(OffsetDateTime.now());
             rawData.setStatus("FILE_PROCESSING_ERROR");
             rawData.setRawContentText("Error processing file: " + e.getMessage());
             rawDataStoreRepository.save(rawData);
-            return createAndSaveErrorCleansedDataStore(rawData, "FILE_ERROR", "ERROR FROM FILE", "FileProcessingError: " + e.getMessage());
+            return createAndSaveErrorCleansedDataStore(rawData, "FILE_ERROR", "ERROR FROM FILE","FileProcessingError: " + e.getMessage());
         }
     }
 
@@ -211,13 +213,13 @@ public class DataIngestionService {
                 rawDataStore.setStatus("INVALID_S3_URI");
                 rawDataStore.setRawContentText("Invalid S3 URI: " + e.getMessage());
                 rawDataStoreRepository.save(rawDataStore);
-                return createAndSaveErrorCleansedDataStore(rawDataStore, "INVALID_S3_URI", "INVALID S3", "InvalidS3URI: " + e.getMessage());
+                return createAndSaveErrorCleansedDataStore(rawDataStore, "INVALID_S3_URI","INVALID S3", "InvalidS3URI: " + e.getMessage());
             } catch (Exception e) {
                 logger.error("Failed to download S3 content for URI: '{}'. Error: {}", sourceUriForDb, e.getMessage(), e);
                 rawDataStore.setStatus("S3_DOWNLOAD_FAILED");
                 rawDataStore.setRawContentText("Error fetching S3 content: " + e.getMessage());
                 rawDataStoreRepository.save(rawDataStore);
-                return createAndSaveErrorCleansedDataStore(rawDataStore, "S3_DOWNLOAD_FAILED", "S3ERROR", "S3DownloadError: " + e.getMessage());
+                return createAndSaveErrorCleansedDataStore(rawDataStore, "S3_DOWNLOAD_FAILED", "S3ERROR","S3DownloadError: " + e.getMessage());
             }
         } else {
             sourceUriForDb = identifier.startsWith("classpath:") ? identifier : "classpath:" + identifier;
@@ -229,7 +231,7 @@ public class DataIngestionService {
                 logger.error("Classpath resource not found: {}", sourceUriForDb);
                 rawDataStore.setStatus("CLASSPATH_FILE_NOT_FOUND");
                 rawDataStoreRepository.save(rawDataStore);
-                return createAndSaveErrorCleansedDataStore(rawDataStore, "CLASSPATH_FILE_NOT_FOUND", "FILE NOT FOUND", "ClasspathError: File not found at " + sourceUriForDb);
+                return createAndSaveErrorCleansedDataStore(rawDataStore, "CLASSPATH_FILE_NOT_FOUND", "FILE NOT FOUND","ClasspathError: File not found at " + sourceUriForDb);
             }
             try (Reader reader = new InputStreamReader(resource.getInputStream(), StandardCharsets.UTF_8)) {
                 rawJsonContent = FileCopyUtils.copyToString(reader);
@@ -238,9 +240,9 @@ public class DataIngestionService {
                 rawDataStore.setStatus("CLASSPATH_READ_ERROR");
                 rawDataStore.setRawContentText("Error reading classpath file: " + e.getMessage());
                 rawDataStoreRepository.save(rawDataStore);
-                return createAndSaveErrorCleansedDataStore(rawDataStore, "CLASSPATH_READ_ERROR", "READ ERROR", "IOError: " + e.getMessage());
+                return createAndSaveErrorCleansedDataStore(rawDataStore, "CLASSPATH_READ_ERROR", "READ ERROR","IOError: " + e.getMessage());
             }
-            try {
+            try{
                 JsonNode rootNode = objectMapper.readTree(rawJsonContent);
                 ((com.fasterxml.jackson.databind.node.ObjectNode) rootNode).remove("_model");
                 ((com.fasterxml.jackson.databind.node.ObjectNode) rootNode).remove("_path");
@@ -257,18 +259,27 @@ public class DataIngestionService {
             rawDataStore.setRawContentText(rawJsonContent);
             rawDataStore.setStatus("EMPTY_CONTENT_LOADED");
             RawDataStore savedForEmpty = rawDataStoreRepository.save(rawDataStore);
-            return createAndSaveErrorCleansedDataStore(savedForEmpty, "EMPTY_CONTENT_LOADED", "Error", "ContentError: Loaded content was empty.");
+            return createAndSaveErrorCleansedDataStore(savedForEmpty, "EMPTY_CONTENT_LOADED","Error" ,"ContentError: Loaded content was empty.");
         }
-
-        // Context file loading (optional) is disabled here; keep consistent hashing to the payload only
-        String contentHash = calculateContentHash(rawJsonContent, null);
+        String contextJson = null;
+        try {
+            Resource contextResource = resourceLoader.getResource("classpath:context-config.json");
+            if (contextResource.exists()) {
+                try (Reader reader = new InputStreamReader(contextResource.getInputStream(), StandardCharsets.UTF_8)) {
+                    contextJson = FileCopyUtils.copyToString(reader);
+                }
+            }
+        } catch (IOException e) {
+            logger.warn("Could not read context-config.json, continuing without it.", e);
+        }
+        String contentHash = calculateContentHash(rawJsonContent, contextJson);
         Optional<RawDataStore> existingRawDataOpt = rawDataStoreRepository.findBySourceUriAndContentHash(sourceUriForDb, contentHash);
 
         if (existingRawDataOpt.isPresent()) {
             RawDataStore existingRawData = existingRawDataOpt.get();
             logger.info("Duplicate content detected for source: {}. Using existing raw_data_id: {}", sourceUriForDb, existingRawData.getId());
             Optional<CleansedDataStore> existingCleansedData = cleansedDataStoreRepository.findByRawDataId(existingRawData.getId());
-            if (existingCleansedData.isPresent()) {
+            if(existingCleansedData.isPresent()){
                 logger.info("Found existing cleansed data for raw_data_id: {}. Skipping processing.", existingRawData.getId());
                 return existingCleansedData.get();
             } else {
@@ -299,7 +310,6 @@ public class DataIngestionService {
 
         return processLoadedContent(rawJsonContent, savedRawDataStore);
     }
-
     @Transactional
     public CleansedDataStore ingestAndCleanseJsonPayload(String jsonPayload, String sourceIdentifier) {
         RawDataStore rawDataStore = findOrCreateRawDataStore(jsonPayload, sourceIdentifier);
@@ -376,7 +386,7 @@ public class DataIngestionService {
             logger.error("Error during content processing for raw data ID: {}. Error: {}", associatedRawDataStore.getId(), e.getMessage(), e);
             associatedRawDataStore.setStatus("EXTRACTION_ERROR");
             rawDataStoreRepository.save(associatedRawDataStore);
-            return createAndSaveErrorCleansedDataStore(associatedRawDataStore, "EXTRACTION_FAILED", "ExtractionError: " + e.getMessage(), "Failed");
+            return createAndSaveErrorCleansedDataStore(associatedRawDataStore, "EXTRACTION_FAILED", "ExtractionError: " + e.getMessage(),"Failed");
         }
     }
 
@@ -402,7 +412,7 @@ public class DataIngestionService {
             if (existingHashOpt.isEmpty() || contentChanged || contextChanged) {
                 changedItems.add(item);
             }
-            // Upsert latest hashes for this (sourcePath, itemType, usagePath)
+            // Always persist latest observed hashes for this (sourcePath,itemType)
             ContentHash hashToSave = existingHashOpt.orElse(new ContentHash(sourcePath, itemType, usagePath, null, null));
             hashToSave.setContentHash(newContentHash);
             hashToSave.setContextHash(newContextHash);
@@ -429,6 +439,7 @@ public class DataIngestionService {
             Envelope currentEnvelope = buildCurrentEnvelope(currentNode, parentEnvelope);
             Facets currentFacets = buildCurrentFacets(currentNode, parentFacets);
 
+            // Section detection logic
             String modelName = currentEnvelope.getModel();
             if (modelName != null && modelName.endsWith("-section")) {
                 String sectionPath = currentEnvelope.getSourcePath();
@@ -459,10 +470,13 @@ public class DataIngestionService {
                 if (CONTENT_FIELD_KEYS.contains(fieldKey)) {
                     if (fieldValue.isTextual()) {
                         currentEnvelope.setUsagePath(usagePath);
+                        // If the key is "copy", use the parent's name. Otherwise, use the key itself.
                         String effectiveFieldName = fieldKey.equals("copy") ? parentFieldName : fieldKey;
                         processContentField(fieldValue.asText(), effectiveFieldName, currentEnvelope, currentFacets, results, counters, false);
                     } else if (fieldValue.isObject() && fieldValue.has("copy") && fieldValue.get("copy").isTextual()) {
                         currentEnvelope.setUsagePath(usagePath);
+                        // This is a nested content fragment. Use the outer envelope's field name (fieldKey).
+                        // If this object is under a URL, it would have been returned above. Here we are safe.
                         processContentField(fieldValue.get("copy").asText(), fieldKey, currentEnvelope, currentFacets, results, counters, false);
                     } else if (fieldValue.isObject() && fieldValue.has("text") && fieldValue.get("text").isTextual()) {
                         currentEnvelope.setUsagePath(usagePath);
@@ -517,10 +531,12 @@ public class DataIngestionService {
                 Facets newFacets = new Facets();
                 newFacets.putAll(parentFacets);
                 newFacets.put("sectionIndex", String.valueOf(i));
+                // When recursing into an array, the parent field name is the one that pointed to the array
                 findAndExtractRecursive(arrayElement, parentFieldName, parentEnvelope, newFacets, results, counters);
             }
         }
     }
+
 
     private Envelope buildCurrentEnvelope(JsonNode currentNode, Envelope parentEnvelope) {
         Envelope currentEnvelope = new Envelope();
@@ -543,10 +559,11 @@ public class DataIngestionService {
 
         if (path != null) {
             Matcher matcher = LOCALE_PATTERN.matcher(path);
+            //cover /en_US/, /en_US, /en-US/, and /en-US.
             if (matcher.find()) {
-                String language = matcher.group(1);
-                String country = matcher.group(2);
-                String locale = language + "_" + country;
+                String language = matcher.group(1);         // "en"
+                String country  = matcher.group(2);         // "US"
+                String locale   = language + "_" + country;
                 currentEnvelope.setLocale(locale);
                 currentEnvelope.setLanguage(language);
                 currentEnvelope.setCountry(country);
@@ -564,10 +581,9 @@ public class DataIngestionService {
     private Facets buildCurrentFacets(JsonNode currentNode, Facets parentFacets) {
         Facets currentFacets = new Facets();
         currentFacets.putAll(parentFacets);
-        // Remove generic content keys that are not contextual properties
-        currentFacets.remove("copy");
-        currentFacets.remove("text");
-        currentFacets.remove("url");
+        currentFacets.remove("copy"); // Remove generic copy if it exists
+        currentFacets.remove("text"); // Avoid duplicating extracted text
+        currentFacets.remove("url");  // Avoid duplicating extracted url text
         currentNode.fields().forEachRemaining(entry -> {
             if (entry.getValue().isValueNode() && !entry.getKey().startsWith("_")) {
                 currentFacets.put(entry.getKey(), entry.getValue().asText());
@@ -608,6 +624,7 @@ public class DataIngestionService {
             item.put("contentHash", calculateContentHash(cleansedContent, null));
             try {
                 item.put("context", objectMapper.convertValue(finalContext, new com.fasterxml.jackson.core.type.TypeReference<>() {}));
+                // Ensure stable property and map ordering when hashing
                 item.put("contextHash", calculateContentHash(objectMapper.writeValueAsString(finalContext), null));
             } catch (JsonProcessingException e) {
                 logger.error("Failed to process context for hashing", e);
@@ -632,48 +649,55 @@ public class DataIngestionService {
         }
 
         if (node.isObject()) {
+            // Build envelope from this analytics object so its _model (e.g., "analytics") is used
+            Envelope analyticsEnvelope = buildCurrentEnvelope(node, env);
+
             JsonNode valueNode = node.get("value");
             if (valueNode != null && !valueNode.isNull()) {
-                processContentField(valueNode.asText(), fieldKey, env, facets, results, counters, true);
+                processContentField(valueNode.asText(), fieldKey, analyticsEnvelope, facets, results, counters, true);
             }
+
             for (String childArrayKey : List.of("items", "children", "child")) {
                 JsonNode childArray = node.get(childArrayKey);
                 if (childArray != null && childArray.isArray()) {
                     for (JsonNode child : childArray) {
-                        processAnalyticsNode(child, fieldKey, env, facets, results, counters);
+                        processAnalyticsNode(child, fieldKey, analyticsEnvelope, facets, results, counters);
                     }
                 }
             }
+
             node.fields().forEachRemaining(e -> {
                 if (!List.of("items", "children", "child", "value").contains(e.getKey())) {
-                    processAnalyticsNode(e.getValue(), fieldKey, env, facets, results, counters);
+                    processAnalyticsNode(e.getValue(), fieldKey, analyticsEnvelope, facets, results, counters);
                 }
             });
             return;
         }
 
         if (node.isArray()) {
-            int analyticsIndex = 0;
+            int idx = 0;
             for (JsonNode element : node) {
                 if (element.isObject()) {
+                    // Prefer each element’s own _model for item_model_hint
+                    Envelope analyticsEnvelope = buildCurrentEnvelope(element, env);
                     String name = element.path("name").asText(null);
                     String value = element.path("value").asText(null);
                     if (value != null && !value.isBlank()) {
                         String uniqueFieldName = (name != null && !name.isBlank())
                                 ? ("analytics[" + name + "]")
-                                : ("analytics[" + analyticsIndex + "]");
-                        processContentField(value, uniqueFieldName, env, facets, results, counters, true);
+                                : ("analytics[" + idx + "]");
+                        processContentField(value, uniqueFieldName, analyticsEnvelope, facets, results, counters, true);
                     }
                 } else if (element.isTextual()) {
-                    processContentField(element.asText(), "analytics[" + analyticsIndex + "]", env, facets, results, counters, true);
+                    processContentField(element.asText(), "analytics[" + idx + "]", env, facets, results, counters, true);
                 }
-                analyticsIndex++;
+                idx++;
             }
         }
     }
 
     private String calculateContentHash(String content, String context) {
-        if (content == null) return null;
+        if (content == null) return null; // Allow hashing of empty strings to differentiate from null
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             digest.update(content.getBytes(StandardCharsets.UTF_8));

@@ -44,7 +44,7 @@ public class ConsolidatedSectionService {
                 logger.warn("Skipping enriched item ID {} due to null itemSourcePath or cleansedText.", item.getId());
                 continue;
             }
-            String usagePath = extractUsagePath(item);
+            String usagePath = extractUsagePath(item); // may be "container ::ref:: fragment" or just a single path
             String[] split = splitUsagePath(usagePath);
             String sectionPath = split[0];
             String sectionUri  = split[1];
