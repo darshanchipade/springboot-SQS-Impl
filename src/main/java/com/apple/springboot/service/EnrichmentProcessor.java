@@ -80,15 +80,7 @@ public class EnrichmentProcessor {
         }
 
         try {
-            // Idempotency: if this item already exists as ENRICHED for this CleansedDataStore, skip Bedrock call
-            boolean alreadyEnrichedForRun = enrichedContentElementRepository
-                    .existsByCleansedDataIdAndItemSourcePathAndItemOriginalFieldNameAndStatus(
-                            cleansedDataEntry.getId(), itemDetail.sourcePath, itemDetail.originalFieldName, "ENRICHED");
-            if (alreadyEnrichedForRun) {
-                logger.info("Skipping enrichment for already ENRICHED item {}::{} for CleansedDataStore {}",
-                        itemDetail.sourcePath, itemDetail.originalFieldName, cleansedDataEntry.getId());
-                return;
-            }
+            // Proceed without per-run idempotency skip; queuing logic prevents duplicates
             Map<String, String> itemContent = new HashMap<>();
             itemContent.put("cleansedContent", itemDetail.cleansedContent);
             JsonNode itemJson = objectMapper.valueToTree(itemContent);
