@@ -52,26 +52,7 @@ public class ConsolidatedSectionService {
             if (sectionPath == null) sectionPath = item.getItemSourcePath();
             if (sectionUri  == null) sectionUri  = item.getItemSourcePath();
 
-            var existingOpt = consolidatedRepo.findBySourceUriAndVersionAndSectionPath(item.getSourceUri(), cleansedData.getVersion(), sectionPath);
-            if (existingOpt.isPresent()) {
-                // Update existing consolidated section with new text and enrichments
-                ConsolidatedEnrichedSection section = existingOpt.get();
-                section.setOriginalFieldName(item.getItemOriginalFieldName());
-                section.setCleansedText(item.getCleansedText());
-                section.setSummary(item.getSummary());
-                section.setClassification(item.getClassification());
-                section.setKeywords(item.getKeywords());
-                section.setTags(item.getTags());
-                section.setSentiment(item.getSentiment());
-                section.setModelUsed(item.getBedrockModelUsed());
-                section.setEnrichmentMetadata(item.getEnrichmentMetadata());
-                section.setEnrichedAt(item.getEnrichedAt());
-                section.setContext(item.getContext());
-                section.setSavedAt(OffsetDateTime.now());
-                section.setStatus(item.getStatus());
-                consolidatedRepo.save(section);
-                logger.info("Updated ConsolidatedEnrichedSection ID {} for sectionPath {}.", section.getId(), sectionPath);
-            } else {
+            {
                 ConsolidatedEnrichedSection section = new ConsolidatedEnrichedSection();
                 section.setCleansedDataId(cleansedData.getId());
                 section.setVersion(cleansedData.getVersion());
