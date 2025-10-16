@@ -52,7 +52,12 @@ public class ConsolidatedSectionService {
             if (sectionPath == null) sectionPath = item.getItemSourcePath();
             if (sectionUri  == null) sectionUri  = item.getItemSourcePath();
 
-            {
+            // Prevent duplicate insert within the same version
+            boolean exists = consolidatedRepo.existsBySectionUriAndSectionPathAndOriginalFieldNameAndCleansedTextAndVersion(
+                    sectionUri, sectionPath, item.getItemOriginalFieldName(), item.getCleansedText(), cleansedData.getVersion()
+            );
+
+            if (!exists) {
                 ConsolidatedEnrichedSection section = new ConsolidatedEnrichedSection();
                 section.setCleansedDataId(cleansedData.getId());
                 section.setVersion(cleansedData.getVersion());
@@ -82,6 +87,9 @@ public class ConsolidatedSectionService {
 
                 consolidatedRepo.save(section);
                 logger.info("Saved new ConsolidatedEnrichedSection ID {} from EnrichedContentElement ID {}", section.getId(), item.getId());
+            } else {
+                logger.info("ConsolidatedEnrichedSection already exists for (uri={}, path={}, field={}, ver={}); skipping insert.",
+                        sectionUri, sectionPath, item.getItemOriginalFieldName(), cleansedData.getVersion());
             }
         }
     }
