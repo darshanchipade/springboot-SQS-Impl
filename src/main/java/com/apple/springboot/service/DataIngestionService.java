@@ -603,7 +603,7 @@ public class DataIngestionService {
         }
 
         if (keep) {
-            facets.putAll(facets);
+            //facets.putAll(facets);
             facets.put("cleansedCopy", cleansedContent);
 
             String lowerCaseContent = cleansedContent.toLowerCase();
@@ -649,25 +649,19 @@ public class DataIngestionService {
         }
 
         if (node.isObject()) {
-            // Build envelope from this analytics object so its _model (e.g., "analytics") is used
             Envelope analyticsEnvelope = buildCurrentEnvelope(node, env);
-
             JsonNode valueNode = node.get("value");
             if (valueNode != null && !valueNode.isNull()) {
                 processContentField(valueNode.asText(), fieldKey, analyticsEnvelope, facets, results, counters, true);
             }
-
-            for (String childArrayKey : List.of("items", "children", "child")) {
-                JsonNode childArray = node.get(childArrayKey);
-                if (childArray != null && childArray.isArray()) {
-                    for (JsonNode child : childArray) {
-                        processAnalyticsNode(child, fieldKey, analyticsEnvelope, facets, results, counters);
-                    }
+            for (String k : List.of("items","children","child")) {
+                JsonNode arr = node.get(k);
+                if (arr != null && arr.isArray()) {
+                    for (JsonNode child : arr) processAnalyticsNode(child, fieldKey, analyticsEnvelope, facets, results, counters);
                 }
             }
-
             node.fields().forEachRemaining(e -> {
-                if (!List.of("items", "children", "child", "value").contains(e.getKey())) {
+                if (!List.of("items","children","child","value").contains(e.getKey())) {
                     processAnalyticsNode(e.getValue(), fieldKey, analyticsEnvelope, facets, results, counters);
                 }
             });
@@ -675,23 +669,20 @@ public class DataIngestionService {
         }
 
         if (node.isArray()) {
-            int idx = 0;
-            for (JsonNode element : node) {
-                if (element.isObject()) {
-                    // Prefer each element’s own _model for item_model_hint
-                    Envelope analyticsEnvelope = buildCurrentEnvelope(element, env);
-                    String name = element.path("name").asText(null);
-                    String value = element.path("value").asText(null);
-                    if (value != null && !value.isBlank()) {
-                        String uniqueFieldName = (name != null && !name.isBlank())
-                                ? ("analytics[" + name + "]")
-                                : ("analytics[" + idx + "]");
-                        processContentField(value, uniqueFieldName, analyticsEnvelope, facets, results, counters, true);
+            int i = 0;
+            for (JsonNode el : node) {
+                if (el.isObject()) {
+                    Envelope elEnv = buildCurrentEnvelope(el, env);
+                    String name = el.path("name").asText(null);
+                    String val  = el.path("value").asText(null);
+                    if (val != null && !val.isBlank()) {
+                        String key = (name != null && !name.isBlank()) ? "analytics[" + name + "]" : "analytics[" + i + "]";
+                        processContentField(val, key, elEnv, facets, results, counters, true);
                     }
-                } else if (element.isTextual()) {
-                    processContentField(element.asText(), "analytics[" + idx + "]", env, facets, results, counters, true);
+                } else if (el.isTextual()) {
+                    processContentField(el.asText(), "analytics[" + i + "]", env, facets, results, counters, true);
                 }
-                idx++;
+                i++;
             }
         }
     }
