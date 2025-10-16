@@ -81,9 +81,10 @@ public class EnrichmentProcessor {
 
         try {
             // Idempotency: if this item already exists as ENRICHED for this CleansedDataStore, skip Bedrock call
-            var existingForThisRun = enrichedContentElementRepository
-                    .findByCleansedDataIdAndItemSourcePathAndItemOriginalFieldName(cleansedDataEntry.getId(), itemDetail.sourcePath, itemDetail.originalFieldName);
-            if (existingForThisRun.isPresent() && "ENRICHED".equalsIgnoreCase(existingForThisRun.get().getStatus())) {
+            boolean alreadyEnrichedForRun = enrichedContentElementRepository
+                    .existsByCleansedDataIdAndItemSourcePathAndItemOriginalFieldNameAndStatus(
+                            cleansedDataEntry.getId(), itemDetail.sourcePath, itemDetail.originalFieldName, "ENRICHED");
+            if (alreadyEnrichedForRun) {
                 logger.info("Skipping enrichment for already ENRICHED item {}::{} for CleansedDataStore {}",
                         itemDetail.sourcePath, itemDetail.originalFieldName, cleansedDataEntry.getId());
                 return;

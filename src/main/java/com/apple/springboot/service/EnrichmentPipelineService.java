@@ -81,8 +81,15 @@ public class EnrichmentPipelineService {
         // Track completion on the deduped count
         completionService.startTracking(cleansedDataStoreId, itemsToEnrich.size());
 
-        // Queue deduped items
+        // Queue deduped items; skip items whose cleansedText hasn't changed since last enrichment for this source/version
         for (CleansedItemDetail itemDetail : itemsToEnrich) {
+            boolean sameTextExists = enrichedContentElementRepository.existsByItemSourcePathAndItemOriginalFieldNameAndCleansedText(
+                    itemDetail.sourcePath, itemDetail.originalFieldName, itemDetail.cleansedContent);
+            if (sameTextExists) {
+                // Avoid re-enrichment when the item was already enriched in prior runs and text unchanged
+                logger.info("Skipping queue for unchanged item {}::{} (prior ENRICHED exists)", itemDetail.sourcePath, itemDetail.originalFieldName);
+                continue;
+            }
             EnrichmentMessage message = new EnrichmentMessage(itemDetail, cleansedDataStoreId);
             sqsService.sendMessage(message);
         }
