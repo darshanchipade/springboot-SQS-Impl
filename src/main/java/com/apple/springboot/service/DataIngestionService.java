@@ -65,7 +65,7 @@ public class DataIngestionService {
     private boolean returnAllItems;
 
     // If true, include contextHash in change detection
-    @Value("${app.ingestion.consider-context-change:true}")
+    @Value("${app.ingestion.consider-context-change:false}")
     private boolean considerContextChange;
 
     // If true, log debug counters for found vs kept
