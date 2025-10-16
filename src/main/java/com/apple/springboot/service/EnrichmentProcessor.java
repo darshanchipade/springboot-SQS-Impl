@@ -80,6 +80,14 @@ public class EnrichmentProcessor {
         }
 
         try {
+            // Idempotency: if this item already exists as ENRICHED for this CleansedDataStore, skip Bedrock call
+            var existingForThisRun = enrichedContentElementRepository
+                    .findByCleansedDataIdAndItemSourcePathAndItemOriginalFieldName(cleansedDataEntry.getId(), itemDetail.sourcePath, itemDetail.originalFieldName);
+            if (existingForThisRun.isPresent() && "ENRICHED".equalsIgnoreCase(existingForThisRun.get().getStatus())) {
+                logger.info("Skipping enrichment for already ENRICHED item {}::{} for CleansedDataStore {}",
+                        itemDetail.sourcePath, itemDetail.originalFieldName, cleansedDataEntry.getId());
+                return;
+            }
             Map<String, String> itemContent = new HashMap<>();
             itemContent.put("cleansedContent", itemDetail.cleansedContent);
             JsonNode itemJson = objectMapper.valueToTree(itemContent);
@@ -128,15 +136,22 @@ public class EnrichmentProcessor {
                     // This call also needs to be rate-limited
                     bedrockRateLimiter.acquire();
                     float[] vector = bedrockEnrichmentService.generateEmbedding(chunkText);
-                    ContentChunk contentChunk = new ContentChunk();
-                    contentChunk.setConsolidatedEnrichedSection(section);
-                    contentChunk.setChunkText(chunkText);
-                    contentChunk.setSourceField(section.getSourceUri());
-                    contentChunk.setSectionPath(section.getSectionPath());
-                    contentChunk.setVector(vector);
-                    contentChunk.setCreatedAt(OffsetDateTime.now());
-                    contentChunk.setCreatedBy("EnrichmentPipelineService");
-                    contentChunkRepository.save(contentChunk);
+                    // Upsert content_chunk: update vector if chunk exists, else create new
+                    contentChunkRepository.findByConsolidatedEnrichedSectionAndChunkText(section, chunkText)
+                            .ifPresentOrElse(existing -> {
+                                existing.setVector(vector);
+                                contentChunkRepository.save(existing);
+                            }, () -> {
+                                ContentChunk contentChunk = new ContentChunk();
+                                contentChunk.setConsolidatedEnrichedSection(section);
+                                contentChunk.setChunkText(chunkText);
+                                contentChunk.setSourceField(section.getSourceUri());
+                                contentChunk.setSectionPath(section.getSectionPath());
+                                contentChunk.setVector(vector);
+                                contentChunk.setCreatedAt(OffsetDateTime.now());
+                                contentChunk.setCreatedBy("EnrichmentPipelineService");
+                                contentChunkRepository.save(contentChunk);
+                            });
                 } catch (Exception e) {
                     logger.error("Error creating content chunk for item path {}: {}", section.getSectionPath(), e.getMessage(), e);
                 }
