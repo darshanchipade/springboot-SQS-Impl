@@ -118,72 +118,30 @@ public class EnrichmentProcessor {
     @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
     public void runFinalizationSteps(CleansedDataStore cleansedDataEntry) {
         logger.info("Running finalization steps for CleansedDataStore ID: {}", cleansedDataEntry.getId());
-
-        // 1) Try normal path from enriched elements
         consolidatedSectionService.saveFromCleansedEntry(cleansedDataEntry);
+
         List<ConsolidatedEnrichedSection> savedSections = consolidatedSectionService.getSectionsFor(cleansedDataEntry);
-
-        // 2) Fallback: if nothing saved (e.g., all items errored or rows failed earlier),
-        //    derive minimal sections directly from cleansed items so chunking still proceeds
-        if (savedSections == null || savedSections.isEmpty()) {
-            logger.warn("No consolidated sections found; deriving from cleansed items as fallback.");
-            List<Map<String, Object>> items = cleansedDataEntry.getCleansedItems();
-            List<ConsolidatedEnrichedSection> toSave = new ArrayList<>();
-            if (items != null) {
-                for (Map<String, Object> item : items) {
-                    String sourcePath = (String) item.get("sourcePath");
-                    String originalFieldName = (String) item.get("originalFieldName");
-                    String cleansedText = (String) item.get("cleansedContent");
-
-                    ConsolidatedEnrichedSection section = new ConsolidatedEnrichedSection();
-                    section.setCleansedDataId(cleansedDataEntry.getId());
-                    section.setVersion(cleansedDataEntry.getVersion());
-                    section.setSourceUri(cleansedDataEntry.getSourceUri());
-                    section.setSectionPath(sourcePath);     // container
-                    section.setSectionUri(sourcePath);      // fragment fallback
-                    section.setOriginalFieldName(originalFieldName);
-                    section.setCleansedText(cleansedText);
-                    section.setSavedAt(OffsetDateTime.now());
-                    section.setStatus("ERROR_FALLBACK");    // mark as fallback
-                    toSave.add(section);
-                }
-            }
-            if (!toSave.isEmpty()) {
-                // batch save
-                toSave.forEach(s -> {
-                    try { /* repo inside service */ } catch (Exception ignore) {}
-                });
-                // Reload
-                savedSections = consolidatedSectionService.getSectionsFor(cleansedDataEntry);
-            }
-        }
-
-        // 3) Always chunk; save chunk even if vector fails (vector=null)
-        List<ContentChunk> chunksToSave = new ArrayList<>();
         for (ConsolidatedEnrichedSection section : savedSections) {
             List<String> chunks = textChunkingService.chunkIfNeeded(section.getCleansedText());
             for (String chunkText : chunks) {
-                float[] vector = null;
-                try { vector = bedrockEnrichmentService.generateEmbedding(chunkText); }
-                catch (Exception e) {
-                    logger.warn("Embedding failed; saving chunk without vector. section={}", section.getSectionPath(), e);
+                try {
+                    // This call also needs to be rate-limited
+                    bedrockRateLimiter.acquire();
+                    float[] vector = bedrockEnrichmentService.generateEmbedding(chunkText);
+                    ContentChunk contentChunk = new ContentChunk();
+                    contentChunk.setConsolidatedEnrichedSection(section);
+                    contentChunk.setChunkText(chunkText);
+                    contentChunk.setSourceField(section.getSourceUri());
+                    contentChunk.setSectionPath(section.getSectionPath());
+                    contentChunk.setVector(vector);
+                    contentChunk.setCreatedAt(OffsetDateTime.now());
+                    contentChunk.setCreatedBy("EnrichmentPipelineService");
+                    contentChunkRepository.save(contentChunk);
+                } catch (Exception e) {
+                    logger.error("Error creating content chunk for item path {}: {}", section.getSectionPath(), e.getMessage(), e);
                 }
-                ContentChunk chunk = new ContentChunk();
-                chunk.setConsolidatedEnrichedSection(section);
-                chunk.setChunkText(chunkText);
-                chunk.setSourceField(section.getSourceUri());
-                chunk.setSectionPath(section.getSectionPath());
-                chunk.setVector(vector); // may be null
-                chunk.setCreatedAt(OffsetDateTime.now());
-                chunk.setCreatedBy("EnrichmentPipelineService");
-                chunksToSave.add(chunk);
             }
         }
-        if (!chunksToSave.isEmpty()) {
-            // batch insert for speed
-            contentChunkRepository.saveAll(chunksToSave);
-        }
-
         updateFinalCleansedDataStatus(cleansedDataEntry);
     }
 
