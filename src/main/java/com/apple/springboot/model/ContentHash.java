@@ -21,6 +21,7 @@ public class ContentHash {
     private String itemType;
 
     // Not part of the PK to avoid intrusive DB PK changes; uniqueness enforced via index (see SQL below)
+    @Id
     @Column(name = "usage_path", nullable = false, columnDefinition = "TEXT")
     private String usagePath;
 
