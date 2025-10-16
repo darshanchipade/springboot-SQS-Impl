@@ -112,7 +112,15 @@ public class EnrichmentProcessor {
         } catch (Exception e) {
             persistenceService.saveErrorEnrichedElement(itemDetail, cleansedDataEntry, "ERROR_UNEXPECTED", e.getMessage());
         } finally {
-            checkCompletion(cleansedDataEntry); // triggers consolidation + chunking when all items are processed
+            try {
+                boolean allDone = completionService.itemCompleted(cleansedDataEntry.getId());
+                if (allDone) {
+                    logger.info("All queued items complete for {}. Running finalization.", cleansedDataEntry.getId());
+                    runFinalizationSteps(cleansedDataEntry);
+                }
+            } catch (Exception ex) {
+                logger.error("Completion tracking failed for {}: {}", cleansedDataEntry.getId(), ex.getMessage(), ex);
+            }
         }
     }
 
