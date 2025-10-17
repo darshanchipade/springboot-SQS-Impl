@@ -15,6 +15,9 @@ import java.time.OffsetDateTime;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.HashMap;
+import java.util.HashSet;
 
 @Service
 public class ConsolidatedSectionService {
@@ -36,6 +39,9 @@ public class ConsolidatedSectionService {
 
     @Transactional
     public void saveFromCleansedEntry(CleansedDataStore cleansedData) {
+        // Build an index of all usagePaths per (sourcePath, originalFieldName) from the cleansed items
+        Map<String, Set<String>> usageIndex = buildUsageIndex(cleansedData);
+
         List<EnrichedContentElement> enrichedItems = enrichedRepo.findAllByCleansedDataId(cleansedData.getId());
         logger.info("Found {} enriched items for CleansedDataStore ID: {} to consolidate.", enrichedItems.size(), cleansedData.getId());
 
@@ -44,52 +50,57 @@ public class ConsolidatedSectionService {
                 logger.warn("Skipping enriched item ID {} due to null itemSourcePath or cleansedText.", item.getId());
                 continue;
             }
-            String usagePath = extractUsagePath(item); // may be "container ::ref:: fragment" or just a single path
-            String[] split = splitUsagePath(usagePath);
-            String sectionPath = split[0];
-            String sectionUri  = split[1];
+            // Fan out per usagePath for this fragment
+            String usageKey = usageKey(item.getItemSourcePath(), item.getItemOriginalFieldName());
+            Set<String> usagePaths = usageIndex.getOrDefault(usageKey, Collections.singleton(extractUsagePath(item)));
 
-            if (sectionPath == null) sectionPath = item.getItemSourcePath();
-            if (sectionUri  == null) sectionUri  = item.getItemSourcePath();
+            for (String usagePath : usagePaths) {
+                String[] split = splitUsagePath(usagePath);
+                String sectionPath = split[0];
+                String sectionUri  = split[1];
 
-            // Prevent duplicate insert within the same version
-            boolean exists = consolidatedRepo.existsBySectionUriAndSectionPathAndOriginalFieldNameAndCleansedTextAndVersion(
-                    sectionUri, sectionPath, item.getItemOriginalFieldName(), item.getCleansedText(), cleansedData.getVersion()
-            );
+                if (sectionPath == null) sectionPath = item.getItemSourcePath();
+                if (sectionUri  == null) sectionUri  = item.getItemSourcePath();
 
-            if (!exists) {
-                ConsolidatedEnrichedSection section = new ConsolidatedEnrichedSection();
-                section.setCleansedDataId(cleansedData.getId());
-                section.setVersion(cleansedData.getVersion());
-                section.setSourceUri(item.getSourceUri());
-                section.setSectionPath(sectionPath);
-                section.setSectionUri(sectionUri);
-                section.setOriginalFieldName(item.getItemOriginalFieldName());
-                section.setCleansedText(item.getCleansedText());
+                // Prevent duplicate insert within the same version
+                boolean exists = consolidatedRepo.existsBySectionUriAndSectionPathAndOriginalFieldNameAndCleansedTextAndVersion(
+                        sectionUri, sectionPath, item.getItemOriginalFieldName(), item.getCleansedText(), cleansedData.getVersion()
+                );
 
-                // Prefer hash keyed by usagePath; fall back to legacy two-key lookup if absent
-                contentHashRepository
-                        .findBySourcePathAndItemTypeAndUsagePath(item.getItemSourcePath(), item.getItemOriginalFieldName(), usagePath)
-                        .or(() -> contentHashRepository.findBySourcePathAndItemType(item.getItemSourcePath(), item.getItemOriginalFieldName()))
-                        .ifPresent(contentHash -> section.setContentHash(contentHash.getContentHash()));
+                if (!exists) {
+                    ConsolidatedEnrichedSection section = new ConsolidatedEnrichedSection();
+                    section.setCleansedDataId(cleansedData.getId());
+                    section.setVersion(cleansedData.getVersion());
+                    section.setSourceUri(item.getSourceUri());
+                    section.setSectionPath(sectionPath);
+                    section.setSectionUri(sectionUri);
+                    section.setOriginalFieldName(item.getItemOriginalFieldName());
+                    section.setCleansedText(item.getCleansedText());
 
-                section.setSummary(item.getSummary());
-                section.setClassification(item.getClassification());
-                section.setKeywords(item.getKeywords());
-                section.setTags(item.getTags());
-                section.setSentiment(item.getSentiment());
-                section.setModelUsed(item.getBedrockModelUsed());
-                section.setEnrichmentMetadata(item.getEnrichmentMetadata());
-                section.setEnrichedAt(item.getEnrichedAt());
-                section.setContext(item.getContext());
-                section.setSavedAt(OffsetDateTime.now());
-                section.setStatus(item.getStatus());
+                    // Prefer hash keyed by usagePath; fall back to legacy two-key lookup if absent
+                    contentHashRepository
+                            .findBySourcePathAndItemTypeAndUsagePath(item.getItemSourcePath(), item.getItemOriginalFieldName(), usagePath)
+                            .or(() -> contentHashRepository.findBySourcePathAndItemType(item.getItemSourcePath(), item.getItemOriginalFieldName()))
+                            .ifPresent(contentHash -> section.setContentHash(contentHash.getContentHash()));
 
-                consolidatedRepo.save(section);
-                logger.info("Saved new ConsolidatedEnrichedSection ID {} from EnrichedContentElement ID {}", section.getId(), item.getId());
-            } else {
-                logger.info("ConsolidatedEnrichedSection already exists for (uri={}, path={}, field={}, ver={}); skipping insert.",
-                        sectionUri, sectionPath, item.getItemOriginalFieldName(), cleansedData.getVersion());
+                    section.setSummary(item.getSummary());
+                    section.setClassification(item.getClassification());
+                    section.setKeywords(item.getKeywords());
+                    section.setTags(item.getTags());
+                    section.setSentiment(item.getSentiment());
+                    section.setModelUsed(item.getBedrockModelUsed());
+                    section.setEnrichmentMetadata(item.getEnrichmentMetadata());
+                    section.setEnrichedAt(item.getEnrichedAt());
+                    section.setContext(item.getContext());
+                    section.setSavedAt(OffsetDateTime.now());
+                    section.setStatus(item.getStatus());
+
+                    consolidatedRepo.save(section);
+                    logger.info("Saved new ConsolidatedEnrichedSection ID {} for usagePath '{}' from EnrichedContentElement ID {}", section.getId(), usagePath, item.getId());
+                } else {
+                    logger.info("ConsolidatedEnrichedSection already exists for (uri={}, path={}, field={}, ver={}); skipping insert.",
+                            sectionUri, sectionPath, item.getItemOriginalFieldName(), cleansedData.getVersion());
+                }
             }
         }
     }
@@ -128,5 +139,25 @@ public class ConsolidatedSectionService {
         String left = usagePath.substring(0, idx).trim();
         String right = usagePath.substring(idx + USAGE_REF_DELIM.length()).trim();
         return new String[]{left.isEmpty() ? null : left, right.isEmpty() ? null : right};
+    }
+
+    private Map<String, Set<String>> buildUsageIndex(CleansedDataStore cleansedData) {
+        Map<String, Set<String>> index = new HashMap<>();
+        if (cleansedData == null || cleansedData.getCleansedItems() == null) return index;
+        for (Map<String, Object> item : cleansedData.getCleansedItems()) {
+            try {
+                String sourcePath = (String) item.get("sourcePath");
+                String originalFieldName = (String) item.get("originalFieldName");
+                String usagePath = (String) item.get("usagePath");
+                if (sourcePath == null || originalFieldName == null || usagePath == null) continue;
+                String key = usageKey(sourcePath, originalFieldName);
+                index.computeIfAbsent(key, k -> new HashSet<>()).add(usagePath);
+            } catch (ClassCastException ignored) { /* skip malformed entries */ }
+        }
+        return index;
+    }
+
+    private String usageKey(String sourcePath, String originalFieldName) {
+        return sourcePath + "\u0001" + originalFieldName;
     }
 }
