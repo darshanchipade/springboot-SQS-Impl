@@ -405,12 +405,15 @@ public class DataIngestionService {
 
             if (sourcePath == null || itemType == null) continue;
 
-            Optional<ContentHash> existingHashOpt =
-                    contentHashRepository.findBySourcePathAndItemTypeAndUsagePath(sourcePath, itemType, usagePath);
-            if (existingHashOpt.isEmpty() && !strictUsagePath) {
+            boolean hasUsagePath = usagePath != null && !usagePath.isBlank();
+            Optional<ContentHash> existingHashOpt = hasUsagePath
+                    ? contentHashRepository.findBySourcePathAndItemTypeAndUsagePath(sourcePath, itemType, usagePath)
+                    : Optional.empty();
+            // Only fallback to (sourcePath,itemType) when usagePath is missing AND fallback allowed
+            if (!hasUsagePath && !strictUsagePath && existingHashOpt.isEmpty()) {
                 existingHashOpt = contentHashRepository.findBySourcePathAndItemType(sourcePath, itemType);
                 if (existingHashOpt.isPresent()) {
-                    logger.debug("Change detection fallback matched by (sourcePath,itemType) without usagePath for {} :: {}", sourcePath, itemType);
+                    logger.debug("Change detection fallback matched by (sourcePath,itemType) (usagePath missing) for {} :: {}", sourcePath, itemType);
                 }
             }
 
@@ -422,7 +425,7 @@ public class DataIngestionService {
             if (existingHashOpt.isEmpty() || contentChanged || contextChanged) {
                 changedItems.add(item);
             }
-            // Always persist latest observed hashes for this key
+            // Always persist latest observed hashes for this key (respect usagePath when provided)
             ContentHash hashToSave = existingHashOpt.orElse(new ContentHash(sourcePath, itemType, usagePath, null, null));
             hashToSave.setContentHash(newContentHash);
             hashToSave.setContextHash(newContextHash);
