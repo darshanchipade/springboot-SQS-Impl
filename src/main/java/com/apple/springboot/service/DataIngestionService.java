@@ -407,7 +407,10 @@ public class DataIngestionService {
 
             Optional<ContentHash> existingHashOpt =
                     contentHashRepository.findBySourcePathAndItemTypeAndUsagePath(sourcePath, itemType, usagePath);
-            if (existingHashOpt.isEmpty() && !strictUsagePath) {
+            // IMPORTANT: For usage-path-sensitive content types (e.g., markdown-inline-copy),
+            // do NOT fall back to (sourcePath,itemType) matching, otherwise we will incorrectly
+            // drop distinct occurrences that share the same content but appear under different parents.
+            if (existingHashOpt.isEmpty() && !strictUsagePath && !isUsagePathSensitive(item)) {
                 existingHashOpt = contentHashRepository.findBySourcePathAndItemType(sourcePath, itemType);
                 if (existingHashOpt.isPresent()) {
                     logger.debug("Change detection fallback matched by (sourcePath,itemType) without usagePath for {} :: {}", sourcePath, itemType);
@@ -429,6 +432,19 @@ public class DataIngestionService {
             contentHashRepository.save(hashToSave);
         }
         return changedItems;
+    }
+
+    /**
+     * Returns true when change detection must respect usagePath uniqueness for the item.
+     * This ensures we keep all occurrences that share the same content (e.g., badge "New")
+     * but are used under different parents/sections, so consolidation can fan out correctly.
+     */
+    private boolean isUsagePathSensitive(Map<String, Object> item) {
+        if (item == null) return false;
+        Object modelObj = item.get("model");
+        String model = (modelObj instanceof String) ? (String) modelObj : null;
+        // Treat markdown-inline-copy as usage-path-sensitive
+        return "markdown-inline-copy".equals(model);
     }
 
     private CleansedDataStore createCleansedDataStore(List<Map<String, Object>> items, RawDataStore rawData) {
