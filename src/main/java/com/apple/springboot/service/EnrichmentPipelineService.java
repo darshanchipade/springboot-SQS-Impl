@@ -78,17 +78,24 @@ public class EnrichmentPipelineService {
                         m -> new ArrayList<>(m.values())
                 ));
 
-        // Track completion on the deduped count
-        completionService.startTracking(cleansedDataStoreId, itemsToEnrich.size());
+        // Filter to only items that need enrichment (text changed)
+        List<CleansedItemDetail> itemsToQueue = itemsToEnrich.stream()
+                .filter(itemDetail -> !enrichedContentElementRepository
+                        .existsByItemSourcePathAndItemOriginalFieldNameAndCleansedText(
+                                itemDetail.sourcePath, itemDetail.originalFieldName, itemDetail.cleansedContent))
+                .collect(Collectors.toList());
 
-        // Queue deduped items
-        for (CleansedItemDetail itemDetail : itemsToEnrich) {
+        // Track completion on the ACTUAL number queued
+        completionService.startTracking(cleansedDataStoreId, itemsToQueue.size());
+
+        // Queue items
+        for (CleansedItemDetail itemDetail : itemsToQueue) {
             EnrichmentMessage message = new EnrichmentMessage(itemDetail, cleansedDataStoreId);
             sqsService.sendMessage(message);
         }
 
         cleansedDataEntry.setStatus("ENRICHMENT_QUEUED");
-        logger.info("{} items were queued for enrichment for CleansedDataStore ID: {}", itemsToEnrich.size(), cleansedDataEntry.getId());
+        logger.info("{} items were queued for enrichment for CleansedDataStore ID: {}", itemsToQueue.size(), cleansedDataEntry.getId());
         cleansedDataStoreRepository.save(cleansedDataEntry);
         logger.info("Finished queuing enrichment tasks for CleansedDataStore ID: {}. Final status: {}", cleansedDataEntry.getId(), cleansedDataEntry.getStatus());
     }

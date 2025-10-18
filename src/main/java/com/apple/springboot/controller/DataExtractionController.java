@@ -192,7 +192,7 @@
                 logger.warn("Ingestion/cleansing for {} completed with status: '{}', which is not 'CLEANSED_PENDING_ENRICHMENT'. No enrichment will be triggered. CleansedDataID: {}. Errors: {}",
                         identifierForLog, currentStatus, cleansedDataStoreId, cleansedDataEntry.getCleansingErrors());
                 return ResponseEntity.status(HttpStatus.EXPECTATION_FAILED)
-                        .body("Data ingestion/cleansing for " + identifierForLog + " resulted in status '" + currentStatus + "', cannot proceed to enrichment. Details: " + cleansedDataEntry.getCleansingErrors());
+                        .body("Data ingestion/cleansing for " + identifierForLog + " resulted in status '" + currentStatus + "', cannot proceed to enrichment.");
             }
 
             logger.info("Proceeding to enrichment for CleansedDataStore ID: {} from identifier: {}", cleansedDataStoreId, identifierForLog);

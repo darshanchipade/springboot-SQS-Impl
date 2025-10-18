@@ -80,14 +80,7 @@ public class EnrichmentProcessor {
         }
 
         try {
-            // Idempotency: if this item already exists as ENRICHED for this CleansedDataStore, skip Bedrock call
-            var existingForThisRun = enrichedContentElementRepository
-                    .findByCleansedDataIdAndItemSourcePathAndItemOriginalFieldName(cleansedDataEntry.getId(), itemDetail.sourcePath, itemDetail.originalFieldName);
-            if (existingForThisRun.isPresent() && "ENRICHED".equalsIgnoreCase(existingForThisRun.get().getStatus())) {
-                logger.info("Skipping enrichment for already ENRICHED item {}::{} for CleansedDataStore {}",
-                        itemDetail.sourcePath, itemDetail.originalFieldName, cleansedDataEntry.getId());
-                return;
-            }
+            // Proceed without per-run idempotency skip; queuing logic prevents duplicates
             Map<String, String> itemContent = new HashMap<>();
             itemContent.put("cleansedContent", itemDetail.cleansedContent);
             JsonNode itemJson = objectMapper.valueToTree(itemContent);
@@ -119,7 +112,15 @@ public class EnrichmentProcessor {
         } catch (Exception e) {
             persistenceService.saveErrorEnrichedElement(itemDetail, cleansedDataEntry, "ERROR_UNEXPECTED", e.getMessage());
         } finally {
-            checkCompletion(cleansedDataEntry); // triggers consolidation + chunking when all items are processed
+            try {
+                boolean allDone = completionService.itemCompleted(cleansedDataEntry.getId());
+                if (allDone) {
+                    logger.info("All queued items complete for {}. Running finalization.", cleansedDataEntry.getId());
+                    runFinalizationSteps(cleansedDataEntry);
+                }
+            } catch (Exception ex) {
+                logger.error("Completion tracking failed for {}: {}", cleansedDataEntry.getId(), ex.getMessage(), ex);
+            }
         }
     }
 
@@ -136,22 +137,16 @@ public class EnrichmentProcessor {
                     // This call also needs to be rate-limited
                     bedrockRateLimiter.acquire();
                     float[] vector = bedrockEnrichmentService.generateEmbedding(chunkText);
-                    // Upsert content_chunk: update vector if chunk exists, else create new
-                    contentChunkRepository.findByConsolidatedEnrichedSectionAndChunkText(section, chunkText)
-                            .ifPresentOrElse(existing -> {
-                                existing.setVector(vector);
-                                contentChunkRepository.save(existing);
-                            }, () -> {
-                                ContentChunk contentChunk = new ContentChunk();
-                                contentChunk.setConsolidatedEnrichedSection(section);
-                                contentChunk.setChunkText(chunkText);
-                                contentChunk.setSourceField(section.getSourceUri());
-                                contentChunk.setSectionPath(section.getSectionPath());
-                                contentChunk.setVector(vector);
-                                contentChunk.setCreatedAt(OffsetDateTime.now());
-                                contentChunk.setCreatedBy("EnrichmentPipelineService");
-                                contentChunkRepository.save(contentChunk);
-                            });
+                    // Always create a new content chunk row for versioning
+                    ContentChunk contentChunk = new ContentChunk();
+                    contentChunk.setConsolidatedEnrichedSection(section);
+                    contentChunk.setChunkText(chunkText);
+                    contentChunk.setSourceField(section.getSourceUri());
+                    contentChunk.setSectionPath(section.getSectionPath());
+                    contentChunk.setVector(vector);
+                    contentChunk.setCreatedAt(OffsetDateTime.now());
+                    contentChunk.setCreatedBy("EnrichmentPipelineService");
+                    contentChunkRepository.save(contentChunk);
                 } catch (Exception e) {
                     logger.error("Error creating content chunk for item path {}: {}", section.getSectionPath(), e.getMessage(), e);
                 }

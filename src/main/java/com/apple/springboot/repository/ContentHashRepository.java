@@ -11,4 +11,5 @@ import java.util.Optional;
 public interface ContentHashRepository extends JpaRepository<ContentHash, ContentHashId> {
     Optional<ContentHash> findBySourcePathAndItemTypeAndUsagePath(String sourcePath, String itemType, String usagePath);
     Optional<ContentHash> findBySourcePathAndItemType(String sourcePath, String itemType);
+    Optional<ContentHash> findByUsagePathAndItemType(String usagePath, String itemType);
 }

@@ -15,6 +15,8 @@ public interface EnrichedContentElementRepository extends JpaRepository<Enriched
     long countByCleansedDataIdAndStatus(UUID cleansedDataId, String status);
     List<EnrichedContentElement> findAllByCleansedDataId(UUID cleansedDataId);
     boolean existsByItemSourcePathAndItemOriginalFieldNameAndStatus(String sourcePath, String fieldName, String status);
+    boolean existsByItemSourcePathAndItemOriginalFieldNameAndCleansedText(String sourcePath, String fieldName, String cleansedText);
+    boolean existsByCleansedDataIdAndItemSourcePathAndItemOriginalFieldNameAndStatus(UUID cleansedDataId, String sourcePath, String fieldName, String status);
 
     /**
      * Finds an existing element based on its logical key to prevent duplicates.

@@ -68,6 +68,10 @@ public class DataIngestionService {
     @Value("${app.ingestion.consider-context-change:false}")
     private boolean considerContextChange;
 
+    // If false, fall back to (sourcePath,itemType) when usagePath not found
+    @Value("${app.ingestion.strict-usage-path:false}")
+    private boolean strictUsagePath;
+
     // If true, log debug counters for found vs kept
     @Value("${app.ingestion.debug-counters:true}")
     private boolean debugCountersEnabled;
@@ -403,6 +407,12 @@ public class DataIngestionService {
 
             Optional<ContentHash> existingHashOpt =
                     contentHashRepository.findBySourcePathAndItemTypeAndUsagePath(sourcePath, itemType, usagePath);
+            if (existingHashOpt.isEmpty() && !strictUsagePath) {
+                existingHashOpt = contentHashRepository.findBySourcePathAndItemType(sourcePath, itemType);
+                if (existingHashOpt.isPresent()) {
+                    logger.debug("Change detection fallback matched by (sourcePath,itemType) without usagePath for {} :: {}", sourcePath, itemType);
+                }
+            }
 
             boolean contentChanged = existingHashOpt.isEmpty()
                     || !Objects.equals(existingHashOpt.get().getContentHash(), newContentHash);
@@ -412,7 +422,7 @@ public class DataIngestionService {
             if (existingHashOpt.isEmpty() || contentChanged || contextChanged) {
                 changedItems.add(item);
             }
-            // Always persist latest observed hashes for this (sourcePath,itemType)
+            // Always persist latest observed hashes for this key
             ContentHash hashToSave = existingHashOpt.orElse(new ContentHash(sourcePath, itemType, usagePath, null, null));
             hashToSave.setContentHash(newContentHash);
             hashToSave.setContextHash(newContextHash);
@@ -473,23 +483,23 @@ public class DataIngestionService {
                         // If the key is "copy", use the parent's name. Otherwise, use the key itself.
                         String effectiveFieldName = fieldKey.equals("copy") ? parentFieldName : fieldKey;
                         processContentField(fieldValue.asText(), effectiveFieldName, currentEnvelope, currentFacets, results, counters, false);// copy object
-                } else if (fieldValue.isObject() && fieldValue.has("copy") && fieldValue.get("copy").isTextual()) {
-                    Envelope contentEnv = buildCurrentEnvelope(fieldValue, currentEnvelope);
-                    contentEnv.setUsagePath(usagePath);
-                    processContentField(fieldValue.get("copy").asText(), fieldKey, contentEnv, currentFacets, results, counters, false);
+                    } else if (fieldValue.isObject() && fieldValue.has("copy") && fieldValue.get("copy").isTextual()) {
+                        Envelope contentEnv = buildCurrentEnvelope(fieldValue, currentEnvelope);
+                        contentEnv.setUsagePath(usagePath);
+                        processContentField(fieldValue.get("copy").asText(), fieldKey, contentEnv, currentFacets, results, counters, false);
 
-            // text object
-                } else if (fieldValue.isObject() && fieldValue.has("text") && fieldValue.get("text").isTextual()) {
-                    Envelope contentEnv = buildCurrentEnvelope(fieldValue, currentEnvelope);
-                    contentEnv.setUsagePath(usagePath);
-                    processContentField(fieldValue.get("text").asText(), fieldKey, contentEnv, currentFacets, results, counters, false);
+                        // text object
+                    } else if (fieldValue.isObject() && fieldValue.has("text") && fieldValue.get("text").isTextual()) {
+                        Envelope contentEnv = buildCurrentEnvelope(fieldValue, currentEnvelope);
+                        contentEnv.setUsagePath(usagePath);
+                        processContentField(fieldValue.get("text").asText(), fieldKey, contentEnv, currentFacets, results, counters, false);
 
-                // url object (string value)
-                } else if (fieldValue.isObject() && fieldValue.has("url") && fieldValue.get("url").isTextual()) {
-                    Envelope contentEnv = buildCurrentEnvelope(fieldValue, currentEnvelope);
-                    contentEnv.setUsagePath(usagePath);
-                    processContentField(fieldValue.get("url").asText(), fieldKey, contentEnv, currentFacets, results, counters, false);
-                }
+                        // url object (string value)
+                    } else if (fieldValue.isObject() && fieldValue.has("url") && fieldValue.get("url").isTextual()) {
+                        Envelope contentEnv = buildCurrentEnvelope(fieldValue, currentEnvelope);
+                        contentEnv.setUsagePath(usagePath);
+                        processContentField(fieldValue.get("url").asText(), fieldKey, contentEnv, currentFacets, results, counters, false);
+                    }
 //                    else if (fieldValue.isObject() && fieldValue.has("copy") && fieldValue.get("copy").isTextual()) {
 //                        currentEnvelope.setUsagePath(usagePath);
 //                        // This is a nested content fragment. Use the outer envelope's field name (fieldKey).
@@ -501,8 +511,8 @@ public class DataIngestionService {
 //                    } else if (fieldValue.isObject() && fieldValue.has("url") && fieldValue.get("url").isTextual()) {
 //                        currentEnvelope.setUsagePath(usagePath);
 //                        processContentField(fieldValue.get("url").asText(), fieldKey, currentEnvelope, currentFacets, results, counters, false);
-                //   }
-                else if (fieldValue.isArray()) {
+                    //   }
+                    else if (fieldValue.isArray()) {
                         if ("disclaimers".equals(fieldKey)) {
                             int groupIndex = 0;
                             for (JsonNode element : fieldValue) {
