@@ -45,13 +45,26 @@ public class ChatbotService {
                     null
             );
 
-            return results.stream()
-                    .map(result -> new ChatbotResultDto(
-                            result.getContentChunk().getConsolidatedEnrichedSection().getCleansedText(),
-                            result.getContentChunk().getConsolidatedEnrichedSection().getSectionUri(),
-                            result.getContentChunk().getConsolidatedEnrichedSection().getSectionPath()
+            final String sectionKeyFinal = key;
+            // Map results to the requested flat format, with cf_id cf1, cf2, ...
+            List<ChatbotResultDto> dtos = results.stream()
+                    .map(ContentChunkWithDistance::getContentChunk)
+                    .map(chunk -> chunk.getConsolidatedEnrichedSection())
+                    .map(section -> new ChatbotResultDto(
+                            sectionKeyFinal,
+                            null,
+                            section.getSectionPath(),
+                            section.getSectionUri(),
+                            section.getCleansedText(),
+                            "v_content_chunks"
                     ))
                     .collect(Collectors.toList());
+
+            // Assign cf1, cf2, ... sequentially
+            for (int i = 0; i < dtos.size(); i++) {
+                dtos.get(i).setCfId("cf" + (i + 1));
+            }
+            return dtos;
         } catch (Exception e) {
             return List.of();
         }
