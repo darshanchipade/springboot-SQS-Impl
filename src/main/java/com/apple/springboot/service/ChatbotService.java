@@ -3,10 +3,13 @@ package com.apple.springboot.service;
 import com.apple.springboot.model.ChatbotRequest;
 import com.apple.springboot.model.ChatbotResultDto;
 import com.apple.springboot.model.ContentChunkWithDistance;
-import com.apple.springboot.model.SearchRequest;
+import com.apple.springboot.model.ConsolidatedEnrichedSection;
+import com.apple.springboot.repository.ConsolidatedEnrichedSectionRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -15,11 +18,14 @@ import java.util.stream.Collectors;
 @Service
 public class ChatbotService {
     private final VectorSearchService vectorSearchService;
+    private final ConsolidatedEnrichedSectionRepository consolidatedRepo;
 
     private static final Pattern SECTION_KEY_PATTERN = Pattern.compile("(?i)\\b([a-z0-9]+(?:-[a-z0-9]+)*)-section(?:-[a-z0-9]+)*\\b");
 
-    public ChatbotService(VectorSearchService vectorSearchService) {
+    public ChatbotService(VectorSearchService vectorSearchService,
+                          ConsolidatedEnrichedSectionRepository consolidatedRepo) {
         this.vectorSearchService = vectorSearchService;
+        this.consolidatedRepo = consolidatedRepo;
     }
 
     public List<ChatbotResultDto> query(ChatbotRequest request) {
@@ -35,45 +41,70 @@ public class ChatbotService {
                 : 15;
 
         try {
+            // First try vector search
             List<ContentChunkWithDistance> results = vectorSearchService.search(
                     key,
                     request != null ? request.getOriginal_field_name() : null,
                     limit,
-                    null,
-                    null,
-                    null,
+                    request != null ? request.getTags() : null,
+                    request != null ? request.getKeywords() : null,
+                    request != null ? request.getContext() : null,
                     null
             );
 
             final String sectionKeyFinal = key;
             // Map results to the requested flat format, with cf_id cf1, cf2, ...
-            List<ChatbotResultDto> dtos = results.stream()
+            List<ChatbotResultDto> vectorDtos = results.stream()
                     .map(r -> {
                         var chunk = r.getContentChunk();
                         var section = chunk.getConsolidatedEnrichedSection();
-                        ChatbotResultDto dto = new ChatbotResultDto(
-                                sectionKeyFinal,
-                                null,
-                                section.getSectionPath(),
-                                section.getSectionUri(),
-                                section.getCleansedText(),
-                                "content_chunks"
-                        );
+                        ChatbotResultDto dto = new ChatbotResultDto();
+                        dto.setSection(sectionKeyFinal);
+                        dto.setSectionPath(section.getSectionPath());
+                        dto.setSectionUri(section.getSectionUri());
+                        dto.setCleansedText(section.getCleansedText());
+                        dto.setSource("content_chunks");
                         dto.setContentRole(section.getOriginalFieldName());
-                        dto.setScore(r.getDistance() > 0 ? 1.0 / (1.0 + r.getDistance()) : 1.0);
-                        dto.setSourceId(section.getId() != null ? section.getId().toString() : null);
                         dto.setLastModified(section.getSavedAt() != null ? section.getSavedAt().toString() : null);
                         dto.setMatchTerms(java.util.List.of(sectionKeyFinal));
                         return dto;
                     })
                     .collect(Collectors.toList());
 
-            // Assign cf1, cf2, ... sequentially
-            for (int i = 0; i < dtos.size(); i++) {
-                dtos.get(i).setCfId("cf" + (i + 1));
-                dtos.get(i).setRank(i + 1);
+            // Also pull matches from consolidated table using key LIKE
+            List<ConsolidatedEnrichedSection> consolidatedMatches = consolidatedRepo.findBySectionKey(sectionKeyFinal, limit);
+            List<ChatbotResultDto> consolidatedDtos = consolidatedMatches.stream()
+                    .map(section -> {
+                        ChatbotResultDto dto = new ChatbotResultDto();
+                        dto.setSection(sectionKeyFinal);
+                        dto.setSectionPath(section.getSectionPath());
+                        dto.setSectionUri(section.getSectionUri());
+                        dto.setCleansedText(section.getCleansedText());
+                        dto.setSource("consolidated_enriched_sections");
+                        dto.setContentRole(section.getOriginalFieldName());
+                        dto.setLastModified(section.getSavedAt() != null ? section.getSavedAt().toString() : null);
+                        dto.setMatchTerms(java.util.List.of(sectionKeyFinal));
+                        return dto;
+                    })
+                    .collect(Collectors.toList());
+
+            // Merge results with stable order: vector first, then consolidated; dedupe by (sectionPath, contentRole)
+            LinkedHashMap<String, ChatbotResultDto> merged = new LinkedHashMap<>();
+            for (ChatbotResultDto d : vectorDtos) {
+                String dedupKey = (d.getSectionPath() == null ? "" : d.getSectionPath()) + "|" + (d.getContentRole() == null ? "" : d.getContentRole());
+                merged.putIfAbsent(dedupKey, d);
             }
-            return dtos;
+            for (ChatbotResultDto d : consolidatedDtos) {
+                String dedupKey = (d.getSectionPath() == null ? "" : d.getSectionPath()) + "|" + (d.getContentRole() == null ? "" : d.getContentRole());
+                merged.putIfAbsent(dedupKey, d);
+            }
+
+            List<ChatbotResultDto> mergedList = new ArrayList<>(merged.values());
+            // Assign cf ids sequentially
+            for (int i = 0; i < mergedList.size(); i++) {
+                mergedList.get(i).setCfId("cf" + (i + 1));
+            }
+            return mergedList;
         } catch (Exception e) {
             return List.of();
         }
