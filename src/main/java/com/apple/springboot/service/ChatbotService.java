@@ -41,9 +41,13 @@ public class ChatbotService {
                 : 15;
 
         try {
-            // First try vector search
+            // Use full user message as the embedding query when available; fallback to key
+            String embeddingQuery = (request != null && StringUtils.hasText(request.getMessage()))
+                    ? request.getMessage()
+                    : key;
+
             List<ContentChunkWithDistance> results = vectorSearchService.search(
-                    key,
+                    embeddingQuery,
                     request != null ? request.getOriginal_field_name() : null,
                     limit,
                     request != null ? request.getTags() : null,
@@ -71,8 +75,21 @@ public class ChatbotService {
                     })
                     .collect(Collectors.toList());
 
-            // Also pull matches from consolidated table using key LIKE
-            List<ConsolidatedEnrichedSection> consolidatedMatches = consolidatedRepo.findBySectionKey(sectionKeyFinal, limit);
+            // Also pull matches from consolidated table using full-text search on message when available, else key
+            List<ConsolidatedEnrichedSection> consolidatedMatches;
+            if (request != null && StringUtils.hasText(request.getMessage())) {
+                consolidatedMatches = consolidatedRepo.findByFullTextSearch(request.getMessage());
+            } else {
+                consolidatedMatches = consolidatedRepo.findBySectionKey(sectionKeyFinal, limit);
+            }
+
+            // If caller provided original_field_name, filter consolidated results to that role
+            if (request != null && StringUtils.hasText(request.getOriginal_field_name())) {
+                final String roleFilter = request.getOriginal_field_name().toLowerCase();
+                consolidatedMatches = consolidatedMatches.stream()
+                        .filter(s -> s.getOriginalFieldName() != null && s.getOriginalFieldName().toLowerCase().contains(roleFilter))
+                        .collect(java.util.stream.Collectors.toList());
+            }
             List<ChatbotResultDto> consolidatedDtos = consolidatedMatches.stream()
                     .map(section -> {
                         ChatbotResultDto dto = new ChatbotResultDto();
@@ -100,9 +117,16 @@ public class ChatbotService {
             }
 
             List<ChatbotResultDto> mergedList = new ArrayList<>(merged.values());
-            // Assign cf ids sequentially
+            // Assign cf ids sequentially and enrich match terms from request
             for (int i = 0; i < mergedList.size(); i++) {
-                mergedList.get(i).setCfId("cf" + (i + 1));
+                ChatbotResultDto item = mergedList.get(i);
+                item.setCfId("cf" + (i + 1));
+                // Include key and any provided tags/keywords as match terms
+                java.util.LinkedHashSet<String> terms = new java.util.LinkedHashSet<>();
+                terms.add(sectionKeyFinal);
+                if (request != null && request.getTags() != null) terms.addAll(request.getTags());
+                if (request != null && request.getKeywords() != null) terms.addAll(request.getKeywords());
+                item.setMatchTerms(new java.util.ArrayList<>(terms));
             }
             return mergedList;
         } catch (Exception e) {
