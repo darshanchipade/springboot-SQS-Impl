@@ -32,4 +32,18 @@ public class ConsolidatedEnrichedSectionRepositoryImpl implements ConsolidatedEn
 
         return query.getResultList();
     }
+
+    @Override
+    public List<ConsolidatedEnrichedSection> findBySectionKey(String sectionKey, int limit) {
+        String sql = "SELECT * FROM consolidated_enriched_sections " +
+                "WHERE LOWER(COALESCE(original_field_name, '')) LIKE LOWER(CONCAT('%', :key, '%')) " +
+                "   OR LOWER(COALESCE(section_path, '')) LIKE LOWER(CONCAT('%', :key, '%')) " +
+                "   OR LOWER(COALESCE(section_uri, '')) LIKE LOWER(CONCAT('%', :key, '%')) " +
+                "ORDER BY saved_at DESC NULLS LAST";
+
+        Query q = entityManager.createNativeQuery(sql, ConsolidatedEnrichedSection.class);
+        q.setParameter("key", sectionKey);
+        q.setMaxResults(Math.max(1, Math.min(limit, 200)));
+        return q.getResultList();
+    }
 }
