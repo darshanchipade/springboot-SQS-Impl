@@ -52,14 +52,12 @@ public class ChatbotService {
                     .map(r -> {
                         var chunk = r.getContentChunk();
                         var section = chunk.getConsolidatedEnrichedSection();
-                        ChatbotResultDto dto = new ChatbotResultDto(
-                                sectionKeyFinal,
-                                null,
-                                section.getSectionPath(),
-                                section.getSectionUri(),
-                                section.getCleansedText(),
-                                "content_chunks"
-                        );
+                        ChatbotResultDto dto = new ChatbotResultDto();
+                        dto.setSection(sectionKeyFinal);
+                        dto.setSectionPath(section.getSectionPath());
+                        dto.setSectionUri(section.getSectionUri());
+                        dto.setCleansedText(section.getCleansedText());
+                        dto.setSource("content_chunks");
                         dto.setContentRole(section.getOriginalFieldName());
                         dto.setScore(r.getDistance() > 0 ? 1.0 / (1.0 + r.getDistance()) : 1.0);
                         dto.setSourceId(section.getId() != null ? section.getId().toString() : null);
