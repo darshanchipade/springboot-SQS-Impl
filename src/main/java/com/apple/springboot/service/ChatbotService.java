@@ -2,8 +2,8 @@ package com.apple.springboot.service;
 
 import com.apple.springboot.model.ChatbotRequest;
 import com.apple.springboot.model.ChatbotResultDto;
-import com.apple.springboot.model.ConsolidatedEnrichedSection;
-import com.apple.springboot.repository.ConsolidatedEnrichedSectionRepository;
+import com.apple.springboot.model.ContentChunkWithDistance;
+import com.apple.springboot.model.SearchRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -14,12 +14,12 @@ import java.util.stream.Collectors;
 
 @Service
 public class ChatbotService {
-    private final ConsolidatedEnrichedSectionRepository consolidatedRepo;
+    private final VectorSearchService vectorSearchService;
 
     private static final Pattern SECTION_KEY_PATTERN = Pattern.compile("(?i)\\b([a-z0-9]+(?:-[a-z0-9]+)*)-section(?:-[a-z0-9]+)*\\b");
 
-    public ChatbotService(ConsolidatedEnrichedSectionRepository consolidatedRepo) {
-        this.consolidatedRepo = consolidatedRepo;
+    public ChatbotService(VectorSearchService vectorSearchService) {
+        this.vectorSearchService = vectorSearchService;
     }
 
     public List<ChatbotResultDto> query(ChatbotRequest request) {
@@ -32,16 +32,29 @@ public class ChatbotService {
         }
         int limit = (request != null && request.getLimit() != null && request.getLimit() > 0)
                 ? Math.min(request.getLimit(), 200)
-                : 50;
+                : 15;
 
-        List<ConsolidatedEnrichedSection> sections = consolidatedRepo.findBySectionKey(key, limit);
-        return sections.stream()
-                .map(s -> new ChatbotResultDto(
-                        s.getCleansedText(),
-                        s.getSectionUri(),
-                        s.getSectionPath()
-                ))
-                .collect(Collectors.toList());
+        try {
+            List<ContentChunkWithDistance> results = vectorSearchService.search(
+                    key,
+                    request != null ? request.getOriginal_field_name() : null,
+                    limit,
+                    null,
+                    null,
+                    null,
+                    null
+            );
+
+            return results.stream()
+                    .map(result -> new ChatbotResultDto(
+                            result.getContentChunk().getConsolidatedEnrichedSection().getCleansedText(),
+                            result.getContentChunk().getConsolidatedEnrichedSection().getSectionUri(),
+                            result.getContentChunk().getConsolidatedEnrichedSection().getSectionPath()
+                    ))
+                    .collect(Collectors.toList());
+        } catch (Exception e) {
+            return List.of();
+        }
     }
 
     private String extractKey(String message) {
