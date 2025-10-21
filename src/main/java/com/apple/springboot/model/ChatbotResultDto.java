@@ -24,4 +24,22 @@ public class ChatbotResultDto {
 
     @JsonProperty("source")
     private String source; // "v_consolidated_sections" or "v_content_chunks"
+
+    @JsonProperty("content_role")
+    private String contentRole; // maps from original_field_name
+
+    @JsonProperty("rank")
+    private Integer rank;
+
+    @JsonProperty("score")
+    private Double score; // derived from vector distance if available
+
+    @JsonProperty("source_id")
+    private String sourceId; // UUID as string
+
+    @JsonProperty("last_modified")
+    private String lastModified; // ISO timestamp if available
+
+    @JsonProperty("match_terms")
+    private java.util.List<String> matchTerms;
 }

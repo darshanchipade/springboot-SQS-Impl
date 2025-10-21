@@ -48,21 +48,30 @@ public class ChatbotService {
             final String sectionKeyFinal = key;
             // Map results to the requested flat format, with cf_id cf1, cf2, ...
             List<ChatbotResultDto> dtos = results.stream()
-                    .map(ContentChunkWithDistance::getContentChunk)
-                    .map(chunk -> chunk.getConsolidatedEnrichedSection())
-                    .map(section -> new ChatbotResultDto(
-                            sectionKeyFinal,
-                            null,
-                            section.getSectionPath(),
-                            section.getSectionUri(),
-                            section.getCleansedText(),
-                            "v_content_chunks"
-                    ))
+                    .map(r -> {
+                        var chunk = r.getContentChunk();
+                        var section = chunk.getConsolidatedEnrichedSection();
+                        ChatbotResultDto dto = new ChatbotResultDto(
+                                sectionKeyFinal,
+                                null,
+                                section.getSectionPath(),
+                                section.getSectionUri(),
+                                section.getCleansedText(),
+                                "content_chunks"
+                        );
+                        dto.setContentRole(section.getOriginalFieldName());
+                        dto.setScore(r.getDistance() > 0 ? 1.0 / (1.0 + r.getDistance()) : 1.0);
+                        dto.setSourceId(section.getId() != null ? section.getId().toString() : null);
+                        dto.setLastModified(section.getSavedAt() != null ? section.getSavedAt().toString() : null);
+                        dto.setMatchTerms(java.util.List.of(sectionKeyFinal));
+                        return dto;
+                    })
                     .collect(Collectors.toList());
 
             // Assign cf1, cf2, ... sequentially
             for (int i = 0; i < dtos.size(); i++) {
                 dtos.get(i).setCfId("cf" + (i + 1));
+                dtos.get(i).setRank(i + 1);
             }
             return dtos;
         } catch (Exception e) {
