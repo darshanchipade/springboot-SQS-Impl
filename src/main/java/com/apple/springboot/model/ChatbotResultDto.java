@@ -3,9 +3,11 @@ package com.apple.springboot.model;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
 import lombok.Data;
+import lombok.NoArgsConstructor;
 
 @Data
 @AllArgsConstructor
+@NoArgsConstructor
 public class ChatbotResultDto {
     @JsonProperty("section")
     private String section; // e.g., "video-section-header"
@@ -21,6 +23,10 @@ public class ChatbotResultDto {
 
     @JsonProperty("cleansed_text")
     private String cleansedText;
+
+    // Also expose a "text" alias for clients that expect it
+    @JsonProperty("text")
+    public String getText() { return cleansedText; }
 
     @JsonProperty("source")
     private String source; // "v_consolidated_sections" or "v_content_chunks"
