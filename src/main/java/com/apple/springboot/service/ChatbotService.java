@@ -40,9 +40,9 @@ public class ChatbotService {
                     key,
                     request != null ? request.getOriginal_field_name() : null,
                     limit,
-                    null,
-                    null,
-                    null,
+                    request != null ? request.getTags() : null,
+                    request != null ? request.getKeywords() : null,
+                    request != null ? request.getContext() : null,
                     null
             );
 
@@ -75,26 +75,7 @@ public class ChatbotService {
                 dtos.get(i).setRank(i + 1);
             }
             // If vector returned nothing or had nulls, attempt a fallback exact-match pull from consolidated sections by key
-            boolean emptyOrNullish = dtos.isEmpty() || dtos.stream().allMatch(d -> d.getSectionPath() == null && d.getCleansedText() == null);
-            if (emptyOrNullish) {
-                // Fallback to a LIKE-based search via ConsolidatedSectionService/repository if available
-                try {
-                    var manual = new java.util.ArrayList<ChatbotResultDto>();
-                    // Heuristic: synthesize a single entry with the requested key if nothing else
-                    ChatbotResultDto dto = new ChatbotResultDto();
-                    dto.setSection(sectionKeyFinal);
-                    dto.setCleansedText("No results via embedding; please refine your key or try a different role.");
-                    dto.setSource("content_chunks");
-                    dto.setRank(1);
-                    dto.setScore(0.0);
-                    dto.setCfId("cf1");
-                    dto.setMatchTerms(java.util.List.of(sectionKeyFinal));
-                    manual.add(dto);
-                    return manual;
-                } catch (Exception ignore) {
-                    // return the original list
-                }
-            }
+            // No synthetic fallback here; return the vector results only
             return dtos;
         } catch (Exception e) {
             return List.of();
