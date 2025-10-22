@@ -57,6 +57,9 @@ public class ConsolidatedEnrichedSectionRepositoryImpl implements ConsolidatedEn
                 "WHERE LOWER(COALESCE(original_field_name, '')) LIKE LOWER(CONCAT('%', :key, '%')) " +
                 "   OR LOWER(COALESCE(section_path, '')) LIKE LOWER(CONCAT('%', :key, '%')) " +
                 "   OR LOWER(COALESCE(section_uri, '')) LIKE LOWER(CONCAT('%', :key, '%')) " +
+                // also check common context paths that may include a usage or section identifier
+                "   OR LOWER(COALESCE(context->>'usagePath', '')) LIKE LOWER(CONCAT('%', :key, '%')) " +
+                "   OR LOWER(COALESCE(context#>>'{envelope,usagePath}', '')) LIKE LOWER(CONCAT('%', :key, '%')) " +
                 "ORDER BY saved_at DESC NULLS LAST";
 
         Query q = entityManager.createNativeQuery(sql, ConsolidatedEnrichedSection.class);
