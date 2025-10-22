@@ -1,4 +1,3 @@
-
 package com.apple.springboot.service;
 
 import com.apple.springboot.model.ChatbotRequest;
@@ -47,6 +46,9 @@ public class ChatbotService {
                     ? request.getMessage()
                     : key;
 
+            final String sectionKeyFinal = key; // already extracted
+            Double threshold = 0.35; // example: tune as needed
+
             List<ContentChunkWithDistance> results = vectorSearchService.search(
                     embeddingQuery,
                     request != null ? request.getOriginal_field_name() : null,
@@ -54,10 +56,11 @@ public class ChatbotService {
                     request != null ? request.getTags() : null,
                     request != null ? request.getKeywords() : null,
                     request != null ? request.getContext() : null,
-                    null
+                    threshold,
+                    sectionKeyFinal
             );
 
-            final String sectionKeyFinal = key;
+
             // Map results to the requested flat format, with cf_id cf1, cf2, ...
             List<ChatbotResultDto> vectorDtos = results.stream()
                     .map(r -> {
@@ -76,10 +79,10 @@ public class ChatbotService {
                     })
                     .collect(Collectors.toList());
 
-            // Also pull matches from consolidated table using full-text search on message when available, else key
+            // Also pull matches from consolidated table by searching metadata only (avoid matching large cleansed_text)
             List<ConsolidatedEnrichedSection> consolidatedMatches;
             if (request != null && StringUtils.hasText(request.getMessage())) {
-                consolidatedMatches = consolidatedRepo.findByFullTextSearch(request.getMessage());
+                consolidatedMatches = consolidatedRepo.findByMetadataQuery(request.getMessage(), limit);
             } else {
                 consolidatedMatches = consolidatedRepo.findBySectionKey(sectionKeyFinal, limit);
             }

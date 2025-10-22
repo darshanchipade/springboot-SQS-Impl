@@ -11,4 +11,10 @@ public interface ConsolidatedEnrichedSectionRepositoryCustom {
      * Intended for simple chatbot lookups like "video-section-header".
      */
     List<ConsolidatedEnrichedSection> findBySectionKey(String sectionKey, int limit);
+
+    /**
+     * Full-text search across metadata ONLY (excludes cleansed_text content).
+     * Fields included: summary, tags, keywords, original_field_name, section_path, section_uri.
+     */
+    List<ConsolidatedEnrichedSection> findByMetadataQuery(String query, int limit);
 }

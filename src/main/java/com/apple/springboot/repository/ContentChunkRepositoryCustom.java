@@ -12,6 +12,7 @@ public interface ContentChunkRepositoryCustom {
             String[] keywords,
             Map<String, Object> contextMap,
             Double threshold,
-            int limit
+            int limit,
+            String sectionKeyFilter
     );
 }

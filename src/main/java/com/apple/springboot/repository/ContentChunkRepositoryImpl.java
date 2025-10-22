@@ -20,7 +20,7 @@ public class ContentChunkRepositoryImpl implements ContentChunkRepositoryCustom 
     private EntityManager entityManager;
 
     @Override
-    public List<ContentChunkWithDistance> findSimilar(float[] embedding, String originalFieldName, String[] tags, String[] keywords, Map<String, Object> contextMap, Double threshold, int limit) {
+    public List<ContentChunkWithDistance> findSimilar(float[] embedding, String originalFieldName, String[] tags, String[] keywords, Map<String, Object> contextMap, Double threshold, int limit, String sectionKeyFilter) {
         StringBuilder sql = new StringBuilder("SELECT c.*");
         if (embedding != null) {
             sql.append(", (c.vector <=> CAST(:embedding AS vector)) as distance");
@@ -55,6 +55,15 @@ public class ContentChunkRepositoryImpl implements ContentChunkRepositoryCustom 
                 sql.append(" AND (c.vector <=> CAST(:embedding AS vector)) < :distance_threshold");
             }
             sql.append(" ORDER BY distance");
+        }
+        if (sectionKeyFilter != null && !sectionKeyFilter.isBlank()) {
+            sql.append(" AND (")
+                    .append("LOWER(COALESCE(s.section_path, '')) LIKE LOWER(CONCAT('%', :sectionKey))")
+                    .append(" OR LOWER(COALESCE(s.section_uri, '')) LIKE LOWER(CONCAT('%', :sectionKey))")
+                    .append(" OR LOWER(COALESCE(s.context->>'usagePath', '')) LIKE LOWER(CONCAT('%', :sectionKey))")
+                    .append(" OR LOWER(COALESCE(s.context#>>'{envelope,usagePath}', '')) LIKE LOWER(CONCAT('%', :sectionKey))")
+                    .append(")");
+            params.put("sectionKey", "%" + sectionKeyFilter.toLowerCase() + "%");
         }
         sql.append(" LIMIT :limit");
         params.put("limit", limit);

@@ -24,7 +24,7 @@ public class RefinementService {
     public List<RefinementChip> getRefinementChips(String query) throws IOException {
         // Perform a pure semantic search with a balanced threshold to get relevant documents.
         Double threshold = 0.9;
-        List<ContentChunkWithDistance> initialChunks = vectorSearchService.search(query, null,20, null, null, null, threshold);
+        List<ContentChunkWithDistance> initialChunks = vectorSearchService.search(query, null,20, null, null, null, threshold,null);
 
         if (initialChunks.isEmpty()) {
             return Collections.emptyList();

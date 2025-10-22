@@ -9,6 +9,7 @@ public class SearchRequest {
     private List<String> keywords;
     private Map<String, Object> context;
     private String original_field_name;
+    private  String sectionFilter;
 
     // Getters and setters
     public String getQuery() { return query; }
