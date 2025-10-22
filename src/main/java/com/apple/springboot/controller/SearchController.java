@@ -36,11 +36,12 @@ public class SearchController {
         List<ContentChunkWithDistance> results = vectorSearchService.search(
                 request.getQuery(),
                 request.getOriginal_field_name(),
-                15, // limit
+                15,                  // limit
                 request.getTags(),
                 request.getKeywords(),
                 request.getContext(),
-                null // No threshold for filtered search
+                null,                // threshold
+                null                 // sectionKeyFilter (e.g., "chapter-nav-section") or leave null
         );
 
 

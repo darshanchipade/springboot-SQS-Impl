@@ -50,12 +50,6 @@ public class ContentChunkRepositoryImpl implements ContentChunkRepositoryCustom 
         if (contextMap != null && !contextMap.isEmpty()) {
             buildJsonbQueries(contextMap, new ArrayList<>(), sql, params);
         }
-        if (embedding != null) {
-            if (params.containsKey("distance_threshold")) {
-                sql.append(" AND (c.vector <=> CAST(:embedding AS vector)) < :distance_threshold");
-            }
-            sql.append(" ORDER BY distance");
-        }
         if (sectionKeyFilter != null && !sectionKeyFilter.isBlank()) {
             sql.append(" AND (")
                     .append("LOWER(COALESCE(s.section_path, '')) LIKE LOWER(CONCAT('%', :sectionKey))")
@@ -64,6 +58,12 @@ public class ContentChunkRepositoryImpl implements ContentChunkRepositoryCustom 
                     .append(" OR LOWER(COALESCE(s.context#>>'{envelope,usagePath}', '')) LIKE LOWER(CONCAT('%', :sectionKey))")
                     .append(")");
             params.put("sectionKey", "%" + sectionKeyFilter.toLowerCase() + "%");
+        }
+        if (embedding != null) {
+            if (params.containsKey("distance_threshold")) {
+                sql.append(" AND (c.vector <=> CAST(:embedding AS vector)) < :distance_threshold");
+            }
+            sql.append(" ORDER BY distance");
         }
         sql.append(" LIMIT :limit");
         params.put("limit", limit);

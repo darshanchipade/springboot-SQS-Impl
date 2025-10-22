@@ -34,4 +34,16 @@ public class VectorSearchService {
         String fieldName = (original_field_name != null && !original_field_name.isEmpty()) ? original_field_name.toLowerCase() : null;
         return contentChunkRepository.findSimilar(queryVector, fieldName, tagsArray, keywordsArray, contextMap, threshold, limit, sectionKeyFilter);
     }
+    public List<ContentChunkWithDistance> search(
+            String query,
+            String original_field_name,
+            int limit,
+            List<String> tags,
+            List<String> keywords,
+            Map<String, Object> contextMap,
+            Double threshold
+    ) throws IOException {
+        return search(query, original_field_name, limit, tags, keywords, contextMap, threshold, null);
+    }
+
 }
