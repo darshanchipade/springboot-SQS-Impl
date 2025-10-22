@@ -7,14 +7,13 @@ public interface ConsolidatedEnrichedSectionRepositoryCustom {
     List<ConsolidatedEnrichedSection> findByFullTextSearch(String query);
 
     /**
-     * Case-insensitive LIKE search across original_field_name, section_path, and section_uri.
-     * Intended for simple chatbot lookups like "video-section-header".
+     * Case-insensitive LIKE search across original_field_name, section_path, section_uri, and context usagePath.
      */
     List<ConsolidatedEnrichedSection> findBySectionKey(String sectionKey, int limit);
 
     /**
      * Full-text search across metadata ONLY (excludes cleansed_text content).
-     * Fields included: summary, tags, keywords, original_field_name, section_path, section_uri.
+     * Fields included: summary, tags, keywords, original_field_name, section_path, section_uri, context usagePath.
      */
     List<ConsolidatedEnrichedSection> findByMetadataQuery(String query, int limit);
 }

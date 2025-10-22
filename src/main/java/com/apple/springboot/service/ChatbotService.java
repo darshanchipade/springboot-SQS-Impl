@@ -20,7 +20,8 @@ public class ChatbotService {
     private final VectorSearchService vectorSearchService;
     private final ConsolidatedEnrichedSectionRepository consolidatedRepo;
 
-    private static final Pattern SECTION_KEY_PATTERN = Pattern.compile("(?i)\\b([a-z0-9]+(?:-[a-z0-9]+)*)-section(?:-[a-z0-9]+)*\\b");
+    private static final Pattern SECTION_KEY_PATTERN =
+            Pattern.compile("(?i)\\b([a-z0-9]+(?:-[a-z0-9]+)*)-section(?:-[a-z0-9]+)*\\b");
 
     public ChatbotService(VectorSearchService vectorSearchService,
                           ConsolidatedEnrichedSectionRepository consolidatedRepo) {
@@ -36,32 +37,31 @@ public class ChatbotService {
         if (!StringUtils.hasText(key)) {
             return List.of();
         }
+
         int limit = (request != null && request.getLimit() != null && request.getLimit() > 0)
                 ? Math.min(request.getLimit(), 200)
                 : 15;
 
+        boolean hasRoleQuery = request != null && StringUtils.hasText(request.getOriginal_field_name());
+        int vectorPreLimit = hasRoleQuery ? Math.min(limit * 3, 100) : limit;
+
         try {
-            // Use full user message as the embedding query when available; fallback to key
-            String embeddingQuery = (request != null && StringUtils.hasText(request.getMessage()))
-                    ? request.getMessage()
-                    : key;
+            String message = request != null ? request.getMessage() : null;
+            String embeddingQuery = StringUtils.hasText(message) ? message : key;
 
-            final String sectionKeyFinal = key; // already extracted
-            Double threshold = 0.35; // example: tune as needed
-
+            // Vector: do NOT hard-filter by original_field_name to allow partial queries
             List<ContentChunkWithDistance> results = vectorSearchService.search(
                     embeddingQuery,
-                    request != null ? request.getOriginal_field_name() : null,
-                    limit,
+                    null, // avoid strict equality in SQL for partial role queries
+                    vectorPreLimit,
                     request != null ? request.getTags() : null,
                     request != null ? request.getKeywords() : null,
                     request != null ? request.getContext() : null,
-                    threshold,
-                    sectionKeyFinal
+                    null // threshold
             );
 
+            final String sectionKeyFinal = key;
 
-            // Map results to the requested flat format, with cf_id cf1, cf2, ...
             List<ChatbotResultDto> vectorDtos = results.stream()
                     .map(r -> {
                         var chunk = r.getContentChunk();
@@ -74,26 +74,36 @@ public class ChatbotService {
                         dto.setSource("content_chunks");
                         dto.setContentRole(section.getOriginalFieldName());
                         dto.setLastModified(section.getSavedAt() != null ? section.getSavedAt().toString() : null);
-                        dto.setMatchTerms(java.util.List.of(sectionKeyFinal));
+                        dto.setMatchTerms(List.of(sectionKeyFinal));
                         return dto;
                     })
                     .collect(Collectors.toList());
 
-            // Also pull matches from consolidated table by searching metadata only (avoid matching large cleansed_text)
-            List<ConsolidatedEnrichedSection> consolidatedMatches;
-            if (request != null && StringUtils.hasText(request.getMessage())) {
-                consolidatedMatches = consolidatedRepo.findByMetadataQuery(request.getMessage(), limit);
-            } else {
-                consolidatedMatches = consolidatedRepo.findBySectionKey(sectionKeyFinal, limit);
+            // Post-filter vector by partial role (case-insensitive) when provided
+            if (hasRoleQuery) {
+                String roleFilter = request.getOriginal_field_name().toLowerCase();
+                vectorDtos = vectorDtos.stream()
+                        .filter(d -> d.getContentRole() != null && d.getContentRole().toLowerCase().contains(roleFilter))
+                        .collect(Collectors.toList());
             }
 
-            // If caller provided original_field_name, filter consolidated results to that role
-            if (request != null && StringUtils.hasText(request.getOriginal_field_name())) {
+            // Consolidated: search metadata (incl. context usagePath) using full message if available; otherwise section key
+            List<ConsolidatedEnrichedSection> consolidatedMatches;
+            if (StringUtils.hasText(message)) {
+                consolidatedMatches = consolidatedRepo.findByMetadataQuery(message, Math.max(limit * 2, 50));
+            } else {
+                consolidatedMatches = consolidatedRepo.findBySectionKey(sectionKeyFinal, Math.max(limit * 2, 50));
+            }
+
+            // Partial role filtering (contains, case-insensitive) for consolidated
+            if (hasRoleQuery) {
                 final String roleFilter = request.getOriginal_field_name().toLowerCase();
                 consolidatedMatches = consolidatedMatches.stream()
-                        .filter(s -> s.getOriginalFieldName() != null && s.getOriginalFieldName().toLowerCase().contains(roleFilter))
-                        .collect(java.util.stream.Collectors.toList());
+                        .filter(s -> s.getOriginalFieldName() != null
+                                && s.getOriginalFieldName().toLowerCase().contains(roleFilter))
+                        .collect(Collectors.toList());
             }
+
             List<ChatbotResultDto> consolidatedDtos = consolidatedMatches.stream()
                     .map(section -> {
                         ChatbotResultDto dto = new ChatbotResultDto();
@@ -104,34 +114,44 @@ public class ChatbotService {
                         dto.setSource("consolidated_enriched_sections");
                         dto.setContentRole(section.getOriginalFieldName());
                         dto.setLastModified(section.getSavedAt() != null ? section.getSavedAt().toString() : null);
-                        dto.setMatchTerms(java.util.List.of(sectionKeyFinal));
+                        dto.setMatchTerms(List.of(sectionKeyFinal));
                         return dto;
                     })
                     .collect(Collectors.toList());
 
-            // Merge results with stable order: vector first, then consolidated; dedupe by (sectionPath, contentRole)
+            // Merge vector-first, then consolidated; dedupe by section_path + content_role
             LinkedHashMap<String, ChatbotResultDto> merged = new LinkedHashMap<>();
             for (ChatbotResultDto d : vectorDtos) {
-                String dedupKey = (d.getSectionPath() == null ? "" : d.getSectionPath()) + "|" + (d.getContentRole() == null ? "" : d.getContentRole());
+                String dedupKey = (d.getSectionPath() == null ? "" : d.getSectionPath())
+                        + "|" + (d.getContentRole() == null ? "" : d.getContentRole());
                 merged.putIfAbsent(dedupKey, d);
             }
             for (ChatbotResultDto d : consolidatedDtos) {
-                String dedupKey = (d.getSectionPath() == null ? "" : d.getSectionPath()) + "|" + (d.getContentRole() == null ? "" : d.getContentRole());
+                String dedupKey = (d.getSectionPath() == null ? "" : d.getSectionPath())
+                        + "|" + (d.getContentRole() == null ? "" : d.getContentRole());
                 merged.putIfAbsent(dedupKey, d);
             }
 
             List<ChatbotResultDto> mergedList = new ArrayList<>(merged.values());
-            // Assign cf ids sequentially and enrich match terms from request
+
+            // Trim to limit after filtering
+            if (mergedList.size() > limit) {
+                mergedList = mergedList.subList(0, limit);
+            }
+
+            // Assign cf ids; enrich match_terms with tags/keywords and role if provided
             for (int i = 0; i < mergedList.size(); i++) {
                 ChatbotResultDto item = mergedList.get(i);
                 item.setCfId("cf" + (i + 1));
-                // Include key and any provided tags/keywords as match terms
-                java.util.LinkedHashSet<String> terms = new java.util.LinkedHashSet<>();
+
+                var terms = new java.util.LinkedHashSet<String>();
                 terms.add(sectionKeyFinal);
+                if (hasRoleQuery) terms.add(request.getOriginal_field_name());
                 if (request != null && request.getTags() != null) terms.addAll(request.getTags());
                 if (request != null && request.getKeywords() != null) terms.addAll(request.getKeywords());
-                item.setMatchTerms(new java.util.ArrayList<>(terms));
+                item.setMatchTerms(new ArrayList<>(terms));
             }
+
             return mergedList;
         } catch (Exception e) {
             return List.of();
