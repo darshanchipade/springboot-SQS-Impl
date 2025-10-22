@@ -75,10 +75,10 @@ public class ChatbotService {
                     })
                     .collect(Collectors.toList());
 
-            // Also pull matches from consolidated table using full-text search on message when available, else key
+            // Also pull matches from consolidated table by searching metadata only (avoid matching large cleansed_text)
             List<ConsolidatedEnrichedSection> consolidatedMatches;
             if (request != null && StringUtils.hasText(request.getMessage())) {
-                consolidatedMatches = consolidatedRepo.findByFullTextSearch(request.getMessage());
+                consolidatedMatches = consolidatedRepo.findByMetadataQuery(request.getMessage(), limit);
             } else {
                 consolidatedMatches = consolidatedRepo.findBySectionKey(sectionKeyFinal, limit);
             }

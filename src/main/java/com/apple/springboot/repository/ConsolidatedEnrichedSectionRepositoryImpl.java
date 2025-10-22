@@ -21,7 +21,6 @@ public class ConsolidatedEnrichedSectionRepositoryImpl implements ConsolidatedEn
         String sql = "SELECT * FROM consolidated_enriched_sections " +
                 "WHERE to_tsvector('english', " +
                 "COALESCE(summary, '') || ' ' || " +
-                "COALESCE(cleansed_text, '') || ' ' || " +
                 "COALESCE(array_to_string(tags, ' '), '') || ' ' || " +
                 "COALESCE(array_to_string(keywords, ' '), '')) " +
                 "@@ plainto_tsquery('english', :query)";
@@ -30,6 +29,25 @@ public class ConsolidatedEnrichedSectionRepositoryImpl implements ConsolidatedEn
         query.setParameter("query", textQuery);
         query.setMaxResults(50); // Limit the results to a reasonable number for facet generation
 
+        return query.getResultList();
+    }
+
+    @Override
+    public List<ConsolidatedEnrichedSection> findByMetadataQuery(String textQuery, int limit) {
+        // Excludes cleansed_text on purpose; searches metadata only
+        String sql = "SELECT * FROM consolidated_enriched_sections " +
+                "WHERE to_tsvector('english', " +
+                "COALESCE(summary, '') || ' ' || " +
+                "COALESCE(array_to_string(tags, ' '), '') || ' ' || " +
+                "COALESCE(array_to_string(keywords, ' '), '') || ' ' || " +
+                "COALESCE(original_field_name, '') || ' ' || " +
+                "COALESCE(section_path, '') || ' ' || " +
+                "COALESCE(section_uri, '')) " +
+                "@@ plainto_tsquery('english', :query)";
+
+        Query query = entityManager.createNativeQuery(sql, ConsolidatedEnrichedSection.class);
+        query.setParameter("query", textQuery);
+        query.setMaxResults(Math.max(1, Math.min(limit, 200)));
         return query.getResultList();
     }
 
