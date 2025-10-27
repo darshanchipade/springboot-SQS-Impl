@@ -216,6 +216,67 @@ public class BedrockEnrichmentService {
         return results;
     }
 
+    /**
+     * Generic chat invoke for free-form prompts. Returns the first text block from the response.
+     * The caller is responsible for further parsing (e.g., JSON).
+     */
+    public String invokeChatForText(String content, Integer overrideMaxTokens) {
+        String effectiveModelId = this.bedrockModelId;
+        int maxTokens = overrideMaxTokens != null ? Math.max(64, overrideMaxTokens) : this.bedrockMaxTokens;
+
+        try {
+            ObjectNode payload = objectMapper.createObjectNode();
+            payload.put("anthropic_version", "bedrock-2023-05-31");
+            payload.put("max_tokens", maxTokens);
+            List<ObjectNode> messages = new ArrayList<>();
+            ObjectNode userMessage = objectMapper.createObjectNode();
+            userMessage.put("role", "user");
+            userMessage.put("content", content);
+            messages.add(userMessage);
+            payload.set("messages", objectMapper.valueToTree(messages));
+
+            String payloadJson = objectMapper.writeValueAsString(payload);
+            SdkBytes body = SdkBytes.fromUtf8String(payloadJson);
+
+            InvokeModelRequest request = InvokeModelRequest.builder()
+                    .modelId(effectiveModelId)
+                    .contentType("application/json")
+                    .accept("application/json")
+                    .body(body)
+                    .build();
+
+            InvokeModelResponse response = invokeWithRetry(request, false);
+            String responseBodyString = response.body().asUtf8String();
+            JsonNode responseJson = objectMapper.readTree(responseBodyString);
+            JsonNode contentBlock = responseJson.path("content");
+
+            if (contentBlock.isArray() && contentBlock.size() > 0) {
+                String textContent = contentBlock.get(0).path("text").asText("").trim();
+
+                // Common case: models sometimes wrap with ```json fences
+                if (textContent.startsWith("```json")) {
+                    textContent = textContent.substring(7).trim();
+                    if (textContent.endsWith("```")) {
+                        textContent = textContent.substring(0, textContent.length() - 3).trim();
+                    }
+                } else if (textContent.startsWith("```") && textContent.endsWith("```")) {
+                    textContent = textContent.substring(3, textContent.length() - 3).trim();
+                }
+
+                return textContent;
+            }
+
+            throw new RuntimeException("Bedrock response missing content block");
+        } catch (ThrottledException te) {
+            throw te; // do not swallow throttling
+        } catch (BedrockRuntimeException e) {
+            logger.error("Bedrock API error during chat invoke for model {}: {}", this.bedrockModelId, e.awsErrorDetails().errorMessage(), e);
+            throw new RuntimeException("Bedrock API error during chat invoke", e);
+        } catch (Exception e) {
+            throw new RuntimeException("Unexpected error during chat invoke: " + e.getMessage(), e);
+        }
+    }
+
     private InvokeModelResponse invokeWithRetry(InvokeModelRequest request, boolean isEmbedding) {
         final int maxAttempts = 6;
         final long baseBackoffMs = isEmbedding ? 400L : 800L;
