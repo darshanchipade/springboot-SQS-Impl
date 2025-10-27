@@ -52,12 +52,12 @@ public class ContentChunkRepositoryImpl implements ContentChunkRepositoryCustom 
         }
         if (sectionKeyFilter != null && !sectionKeyFilter.isBlank()) {
             sql.append(" AND (")
-                    .append("LOWER(COALESCE(s.section_path, '')) LIKE LOWER(CONCAT('%', :sectionKey))")
-                    .append(" OR LOWER(COALESCE(s.section_uri, '')) LIKE LOWER(CONCAT('%', :sectionKey))")
-                    .append(" OR LOWER(COALESCE(s.context->>'usagePath', '')) LIKE LOWER(CONCAT('%', :sectionKey))")
-                    .append(" OR LOWER(COALESCE(s.context#>>'{envelope,usagePath}', '')) LIKE LOWER(CONCAT('%', :sectionKey))")
-                    .append(")");
-            params.put("sectionKey", "%" + sectionKeyFilter.toLowerCase() + "%");
+                    .append("LOWER(COALESCE(s.section_path, '')) LIKE :sectionKey ")
+                    .append("OR LOWER(COALESCE(s.section_uri, '')) LIKE :sectionKey ")
+                    .append("OR LOWER(COALESCE(s.context->>'usagePath', '')) LIKE :sectionKey ")
+                    .append("OR LOWER(COALESCE(s.context#>>'{envelope,usagePath}', '')) LIKE :sectionKey)")
+            ;
+            params.put("sectionKey", "%" + sectionKeyFilter.toLowerCase() + "%"); // BOTH-SIDES WILDCARD
         }
         if (embedding != null) {
             if (params.containsKey("distance_threshold")) {
