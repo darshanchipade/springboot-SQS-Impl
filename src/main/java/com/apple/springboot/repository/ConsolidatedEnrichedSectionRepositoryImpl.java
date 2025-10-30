@@ -66,4 +66,14 @@ public class ConsolidatedEnrichedSectionRepositoryImpl implements ConsolidatedEn
         query.setMaxResults(Math.max(1, Math.min(limit, 200)));
         return query.getResultList();
     }
+    @Override
+    public List<ConsolidatedEnrichedSection> findByContextSectionKey(String sectionKey, int limit) {
+        String sql = "SELECT * FROM consolidated_enriched_sections " +
+                "WHERE LOWER(COALESCE(context#>>'{facets,sectionKey}', '')) = LOWER(:key) " +
+                "ORDER BY saved_at DESC NULLS LAST";
+        Query q = entityManager.createNativeQuery(sql, ConsolidatedEnrichedSection.class);
+        q.setParameter("key", sectionKey);
+        q.setMaxResults(Math.max(1, Math.min(limit, 500)));
+        return q.getResultList();
+    }
 }

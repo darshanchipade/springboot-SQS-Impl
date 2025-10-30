@@ -5,6 +5,8 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.List;
+
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
@@ -23,6 +25,18 @@ public class ChatbotResultDto {
 
     @JsonProperty("cleansed_text")
     private String cleansedText;
+
+    @JsonProperty("page_id")
+    private String pageId; // derived from path/locale segment (e.g., ipad)
+
+    @JsonProperty("tenant")
+    private String tenant; // derived from path (e.g., applecom-cms)
+
+    @JsonProperty("locale")
+    private String locale; // e.g., en_US
+
+    public <T> ChatbotResultDto(String originalFieldName, String s, String sectionPath, String sectionUri, String chunkText, String source, String originalFieldName1, int rank, double distance, String string, String lastModified, List<T> ts) {
+    }
 
     // Also expose a "text" alias for clients that expect it
     @JsonProperty("text")

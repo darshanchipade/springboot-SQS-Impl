@@ -16,4 +16,5 @@ public interface ConsolidatedEnrichedSectionRepositoryCustom {
      * Fields included: summary, tags, keywords, original_field_name, section_path, section_uri, context usagePath.
      */
     List<ConsolidatedEnrichedSection> findByMetadataQuery(String query, int limit);
+    List<ConsolidatedEnrichedSection> findByContextSectionKey(String sectionKey, int limit);
 }
