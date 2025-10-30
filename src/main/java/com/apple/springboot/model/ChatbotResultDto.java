@@ -41,4 +41,13 @@ public class ChatbotResultDto {
 
     @JsonProperty("match_terms")
     private java.util.List<String> matchTerms;
+
+    @JsonProperty("page_id")
+    private String pageId; // derived from path/locale segment (e.g., ipad)
+
+    @JsonProperty("tenant")
+    private String tenant; // derived from path (e.g., applecom-cms)
+
+    @JsonProperty("locale")
+    private String locale; // e.g., en_US
 }

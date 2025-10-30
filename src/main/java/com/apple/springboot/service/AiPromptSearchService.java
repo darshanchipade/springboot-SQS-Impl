@@ -174,7 +174,71 @@ public class AiPromptSearchService {
         dto.setContentRole(section.getOriginalFieldName());
         dto.setLastModified(section.getSavedAt() != null ? section.getSavedAt().toString() : null);
         dto.setMatchTerms(List.of("ai-search"));
+        // enrich with page_id, tenant, locale
+        dto.setLocale(extractLocale(section));
+        dto.setTenant(extractTenant(section));
+        dto.setPageId(extractPageId(section));
         return dto;
+    }
+
+    private String extractLocale(ConsolidatedEnrichedSection s) {
+        if (s.getContext() != null) {
+            Object env = s.getContext().get("envelope");
+            if (env instanceof java.util.Map<?,?> m) {
+                Object loc = m.get("locale");
+                if (loc instanceof String str && org.springframework.util.StringUtils.hasText(str)) return str;
+            }
+        }
+        String fromPath = extractLocaleFromPath(s.getSectionUri());
+        if (fromPath == null) fromPath = extractLocaleFromPath(s.getSectionPath());
+        return fromPath;
+    }
+
+    private String extractTenant(ConsolidatedEnrichedSection s) {
+        if (s.getContext() != null) {
+            Object env = s.getContext().get("envelope");
+            if (env instanceof java.util.Map<?,?> m) {
+                Object ten = m.get("tenant");
+                if (ten instanceof String str && org.springframework.util.StringUtils.hasText(str)) return str;
+            }
+        }
+        String fromUri = extractTenantFromPath(s.getSectionUri());
+        if (fromUri != null) return fromUri;
+        String fromPath = extractTenantFromPath(s.getSectionPath());
+        return fromPath != null ? fromPath : "applecom-cms";
+    }
+
+    private String extractPageId(ConsolidatedEnrichedSection s) {
+        String pid = extractPageIdFromPath(s.getSectionUri());
+        if (pid == null) pid = extractPageIdFromPath(s.getSectionPath());
+        return pid;
+    }
+
+    private String extractLocaleFromPath(String path) {
+        if (!org.springframework.util.StringUtils.hasText(path)) return null;
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("/([a-z]{2}_[A-Z]{2})/")
+                .matcher(path);
+        if (m.find()) return m.group(1);
+        return null;
+    }
+
+    private String extractTenantFromPath(String path) {
+        if (!org.springframework.util.StringUtils.hasText(path)) return null;
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("/content/dam/([^/]+)/")
+                .matcher(path);
+        if (m.find()) return m.group(1);
+        return null;
+    }
+
+    private String extractPageIdFromPath(String path) {
+        if (!org.springframework.util.StringUtils.hasText(path)) return null;
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("/[a-z]{2}_[A-Z]{2}/([^/]+)/")
+                .matcher(path);
+        if (m.find()) return m.group(1);
+        return null;
     }
 
     private String loadPromptTemplate() {
