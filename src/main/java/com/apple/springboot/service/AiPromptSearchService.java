@@ -99,8 +99,20 @@ public class AiPromptSearchService {
             sectionKey = extractSectionKey(userMessage);
         }
 
+        // Heuristic role extraction from user message when AI didn't provide one.
+        // Note: we'll only apply role filtering if the user explicitly asked for a role.
+        boolean userExplicitRole = userExplicitlyRequestedRole(userMessage, sectionKey)
+                || (request != null && StringUtils.hasText(request.getOriginal_field_name()));
+        if (!StringUtils.hasText(roleHint)) {
+            String inferred = inferRoleHint(userMessage, sectionKey);
+            if (StringUtils.hasText(inferred)) {
+                roleHint = inferred;
+            }
+        }
+
+        // Default to a large limit to support open-ended results; callers can still pass an explicit limit
         int limit = (request != null && request.getLimit() != null && request.getLimit() > 0)
-                ? Math.min(request.getLimit(), 200) : 15;
+                ? request.getLimit() : 1000;
 
         try {
             // Vector search constrained by section; no strict role in SQL
@@ -143,20 +155,55 @@ public class AiPromptSearchService {
                             : consolidatedRepo.findByMetadataQuery(query, Math.max(limit * 2, 50));
 
             if (org.springframework.util.StringUtils.hasText(sectionKey)) {
-                // Use consolidated only for section-scoped answers
-                List<ConsolidatedEnrichedSection> rows =
-                        consolidatedRepo.findByContextSectionKey(sectionKey,
-                                org.springframework.util.StringUtils.hasText(roleHint) ? 50 : limit);
+                // Aggregate results from multiple strategies and dedupe
+                java.util.LinkedHashMap<java.util.UUID, ConsolidatedEnrichedSection> agg = new java.util.LinkedHashMap<>();
 
-                if (org.springframework.util.StringUtils.hasText(roleHint)) {
+                List<ConsolidatedEnrichedSection> broad = consolidatedRepo.findBySectionKey(
+                        sectionKey,
+                        Math.max(limit * 4, 2000));
+                if (broad != null) broad.forEach(s -> { if (s.getId() != null) agg.putIfAbsent(s.getId(), s); });
+
+                List<ConsolidatedEnrichedSection> exactCtx = consolidatedRepo.findByContextSectionKey(
+                        sectionKey,
+                        Math.max(limit * 4, 2000));
+                if (exactCtx != null) exactCtx.forEach(s -> { if (s.getId() != null) agg.putIfAbsent(s.getId(), s); });
+
+                String base = sectionKey;
+                if (base.endsWith("-section")) {
+                    base = base.substring(0, base.length() - "-section".length());
+                }
+                String[] candidates = new String[] {
+                        sectionKey,
+                        sectionKey + "-items",
+                        base,
+                        base + "-section-items"
+                };
+                for (String cand : candidates) {
+                    if (cand == null || cand.isBlank()) continue;
+                    List<ConsolidatedEnrichedSection> alt = consolidatedRepo.findBySectionKey(
+                            cand.toLowerCase(Locale.ROOT), Math.max(limit * 4, 2000));
+                    if (alt != null) alt.forEach(s -> { if (s.getId() != null) agg.putIfAbsent(s.getId(), s); });
+                }
+
+                List<ConsolidatedEnrichedSection> rows = new java.util.ArrayList<>(agg.values());
+
+                // Apply a role only if the user explicitly requested it; ignore AI-suggested roles otherwise
+                if (userExplicitRole && org.springframework.util.StringUtils.hasText(roleHint)) {
                     final String rf = roleHint.toLowerCase();
-                    rows = rows.stream()
-                            .filter(s -> s.getOriginalFieldName() != null
-                                    && s.getOriginalFieldName().toLowerCase().contains(rf))
-                            .limit(1) // exactly one when role is specified
-                            .toList();
+                    boolean anyMatch = rows.stream().anyMatch(s -> s.getOriginalFieldName() != null && s.getOriginalFieldName().toLowerCase().contains(rf));
+                    if (anyMatch) {
+                        rows = rows.stream()
+                                .filter(s -> s.getOriginalFieldName() != null
+                                        && s.getOriginalFieldName().toLowerCase().contains(rf))
+                                .limit(limit)
+                                .toList();
+                    } else {
+                        roleHint = null; // avoid applying non-existent role like "content"
+                        rows = rows.stream().limit(limit).toList();
+                    }
                 } else {
                     // all content for the section
+                    roleHint = null; // ensure match_terms does not include unintended role
                     rows = rows.stream().limit(limit).toList();
                 }
 
@@ -170,7 +217,7 @@ public class AiPromptSearchService {
                     item.setCfId("cf" + (i + 1));
                     item.setSection(sectionKey);
                     java.util.LinkedHashSet<String> terms = new java.util.LinkedHashSet<>();
-                    if (org.springframework.util.StringUtils.hasText(roleHint)) {
+                    if (userExplicitRole && org.springframework.util.StringUtils.hasText(roleHint)) {
                         terms.add(roleHint);
                     }
                     terms.add(sectionKey);
@@ -178,10 +225,19 @@ public class AiPromptSearchService {
                 }
 
                 return out;
-            }} catch(Exception e){
-                return List.of();
             }
+
+            // Fallback path when no sectionKey-driven consolidated results were returned
+            List<ChatbotResultDto> fallback = !vectorDtos.isEmpty()
+                    ? vectorDtos
+                    : metaMatches.stream()
+                    .map(s -> toDto(s, "consolidated_enriched_sections"))
+                    .collect(Collectors.toList());
+            return fallback;
+        } catch(Exception e){
+            return List.of();
         }
+    }
 
     // Helpers
 
@@ -254,6 +310,80 @@ public class AiPromptSearchService {
     private String normalizeKey(String key) {
         if (!StringUtils.hasText(key)) return null;
         return key.trim().toLowerCase();
+    }
+
+    private String inferRoleHint(String text, String sectionKey) {
+        if (!StringUtils.hasText(text)) return null;
+        String t = text.toLowerCase(Locale.ROOT).trim();
+
+        // Try to capture phrase before "for/of <sectionKey>" or just before "for/of"
+        String roleCandidate = null;
+        if (StringUtils.hasText(sectionKey)) {
+            String sk = Pattern.quote(sectionKey.toLowerCase(Locale.ROOT));
+            var mFor = Pattern.compile("(?i)\\bgive\\s+me\\s+(.+?)\\s+(?:for|of)\\s+.*" + sk + "\\b").matcher(t);
+            if (mFor.find()) roleCandidate = mFor.group(1);
+            if (roleCandidate == null) {
+                var mGeneric = Pattern.compile("(?i)\\b(.+?)\\s+(?:for|of)\\s+.*" + sk + "\\b").matcher(t);
+                if (mGeneric.find()) roleCandidate = mGeneric.group(1);
+            }
+        }
+        if (roleCandidate == null) {
+            var mFor = Pattern.compile("(?i)\\bgive\\s+me\\s+(.+?)\\s+(?:for|of)\\s+").matcher(t);
+            if (mFor.find()) roleCandidate = mFor.group(1);
+            if (roleCandidate == null) {
+                var mGeneric = Pattern.compile("(?i)\\b([a-z0-9_-]{3,})\\b\\s+(?:for|of)\\b").matcher(t);
+                if (mGeneric.find()) roleCandidate = mGeneric.group(1);
+            }
+        }
+
+        if (!StringUtils.hasText(roleCandidate)) return null;
+
+        // Tokenize and pick a specific token without any hardcoded stopword list
+        List<String> tokens = Arrays.stream(roleCandidate.split("\\s+"))
+                .map(s -> s.replaceAll("[^a-z0-9_-]", ""))
+                .filter(StringUtils::hasText)
+                .toList();
+        if (tokens.isEmpty()) return null;
+
+        // Choose the last significant token, which often corresponds to the field name
+        String chosen = tokens.get(tokens.size() - 1);
+        return StringUtils.hasText(chosen) ? chosen : null;
+    }
+
+    private boolean userExplicitlyRequestedRole(String text, String sectionKey) {
+        if (!StringUtils.hasText(text)) return false;
+        String t = text.toLowerCase(Locale.ROOT);
+        if (StringUtils.hasText(sectionKey)) {
+            String sk = Pattern.quote(sectionKey.toLowerCase(Locale.ROOT));
+            // only treat explicit single-token role names as role requests to avoid phrases like "all content"
+            if (Pattern.compile("(?i)\\b(?:give\\s+me\\s+)?([a-z0-9_-]+)\\s+(?:for|of)\\s+.*" + sk + "\\b").matcher(t).find()) return true;
+        }
+        // generic: also only a single token before for/of
+        return Pattern.compile("(?i)\\b(?:give\\s+me\\s+)?([a-z0-9_-]+)\\s+(?:for|of)\\b").matcher(t).find();
+    }
+
+    private String pickBestRole(String roleCandidate, List<ConsolidatedEnrichedSection> rows) {
+        List<String> available = rows.stream()
+                .map(ConsolidatedEnrichedSection::getOriginalFieldName)
+                .filter(Objects::nonNull)
+                .map(s -> s.toLowerCase(Locale.ROOT))
+                .distinct()
+                .toList();
+        if (available.isEmpty()) return null;
+        String cand = roleCandidate != null ? roleCandidate.toLowerCase(Locale.ROOT) : null;
+
+        if (cand == null || cand.isBlank()) return null;
+        // 1) Exact match
+        if (cand != null && available.contains(cand)) return cand;
+
+        // 2) Contains either way with boundaries relaxed
+        if (cand != null) {
+            for (String a : available) {
+                if (a.contains(cand) || cand.contains(a)) return a;
+            }
+        }
+        // 4) Fallback: no confident role
+        return null;
     }
 
     private String extractLocale(ConsolidatedEnrichedSection s) {

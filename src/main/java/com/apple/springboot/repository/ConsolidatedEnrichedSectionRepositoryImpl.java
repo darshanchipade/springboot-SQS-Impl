@@ -42,7 +42,7 @@ public class ConsolidatedEnrichedSectionRepositoryImpl implements ConsolidatedEn
 
         Query q = entityManager.createNativeQuery(sql, ConsolidatedEnrichedSection.class);
         q.setParameter("key", sectionKey);
-        q.setMaxResults(Math.max(1, Math.min(limit, 200)));
+        q.setMaxResults(Math.max(1, limit));
         return q.getResultList();
     }
 
@@ -63,7 +63,7 @@ public class ConsolidatedEnrichedSectionRepositoryImpl implements ConsolidatedEn
 
         Query query = entityManager.createNativeQuery(sql, ConsolidatedEnrichedSection.class);
         query.setParameter("query", textQuery);
-        query.setMaxResults(Math.max(1, Math.min(limit, 200)));
+        query.setMaxResults(Math.max(1, limit));
         return query.getResultList();
     }
     @Override
@@ -73,7 +73,7 @@ public class ConsolidatedEnrichedSectionRepositoryImpl implements ConsolidatedEn
                 "ORDER BY saved_at DESC NULLS LAST";
         Query q = entityManager.createNativeQuery(sql, ConsolidatedEnrichedSection.class);
         q.setParameter("key", sectionKey);
-        q.setMaxResults(Math.max(1, Math.min(limit, 500)));
+        q.setMaxResults(Math.max(1, limit));
         return q.getResultList();
     }
 }
