@@ -4,6 +4,7 @@ import com.apple.springboot.model.CleansedDataStore;
 import com.apple.springboot.model.EnrichmentContext;
 import com.apple.springboot.model.EnrichmentMessage;
 import com.apple.springboot.repository.CleansedDataStoreRepository;
+import com.apple.springboot.repository.ContentHashRepository;
 import com.apple.springboot.repository.EnrichedContentElementRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -11,6 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.beans.factory.annotation.Value;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -25,17 +27,26 @@ public class EnrichmentPipelineService {
     private final ObjectMapper objectMapper;
     private final SqsService sqsService;
     private final EnrichmentCompletionService completionService;
+    private final ContentHashRepository contentHashRepository;
+    private final boolean strictUsagePath;
+    private final boolean considerContextChange;
 
     public EnrichmentPipelineService(CleansedDataStoreRepository cleansedDataStoreRepository,
                                      EnrichedContentElementRepository enrichedContentElementRepository,
                                      ObjectMapper objectMapper,
                                      SqsService sqsService,
-                                     EnrichmentCompletionService completionService) {
+                                     EnrichmentCompletionService completionService,
+                                     ContentHashRepository contentHashRepository,
+                                     @Value("${app.ingestion.strict-usage-path:false}") boolean strictUsagePath,
+                                     @Value("${app.ingestion.consider-context-change:false}") boolean considerContextChange) {
         this.cleansedDataStoreRepository = cleansedDataStoreRepository;
         this.enrichedContentElementRepository = enrichedContentElementRepository;
         this.objectMapper = objectMapper;
         this.sqsService = sqsService;
         this.completionService = completionService;
+        this.contentHashRepository = contentHashRepository;
+        this.strictUsagePath = strictUsagePath;
+        this.considerContextChange = considerContextChange;
     }
 
     @Transactional
@@ -80,10 +91,12 @@ public class EnrichmentPipelineService {
 
         // Filter to only items that need enrichment (text changed)
         List<CleansedItemDetail> itemsToQueue = itemsToEnrich.stream()
-                .filter(itemDetail -> !enrichedContentElementRepository
-                        .existsByItemSourcePathAndItemOriginalFieldNameAndCleansedText(
-                                itemDetail.sourcePath, itemDetail.originalFieldName, itemDetail.cleansedContent))
+                .filter(this::shouldQueueItem)
                 .collect(Collectors.toList());
+        int skipped = itemsToEnrich.size() - itemsToQueue.size();
+        if (skipped > 0) {
+            logger.info("Skipped {} unchanged items for CleansedDataStore ID: {} based on existing enrichment metadata.", skipped, cleansedDataEntry.getId());
+        }
 
         // Track completion on the ACTUAL number queued
         completionService.startTracking(cleansedDataStoreId, itemsToQueue.size());
@@ -109,7 +122,10 @@ public class EnrichmentPipelineService {
                         String cleansedContent = (String) map.get("cleansedContent");
                         String model = (String) map.get("model");
                         EnrichmentContext context = objectMapper.convertValue(map.get("context"), EnrichmentContext.class);
-                        return new CleansedItemDetail(sourcePath, originalFieldName, cleansedContent, model, context);
+                        String usagePath = (String) map.get("usagePath");
+                        String contentHash = (String) map.get("contentHash");
+                        String contextHash = (String) map.get("contextHash");
+                        return new CleansedItemDetail(sourcePath, originalFieldName, cleansedContent, model, context, usagePath, contentHash, contextHash);
                     } catch (Exception e) {
                         logger.warn("Could not convert map to CleansedItemDetail object. Skipping item. Map: {}, Error: {}", map, e.getMessage());
                         return null;
@@ -117,5 +133,41 @@ public class EnrichmentPipelineService {
                 })
                 .filter(Objects::nonNull)
                 .collect(Collectors.toList());
+    }
+
+    private boolean shouldQueueItem(CleansedItemDetail itemDetail) {
+        if (itemDetail == null) {
+            return false;
+        }
+
+        // If we already have enriched content with the same cleansed text, skip immediately
+        if (enrichedContentElementRepository
+                .existsByItemSourcePathAndItemOriginalFieldNameAndCleansedText(
+                        itemDetail.sourcePath, itemDetail.originalFieldName, itemDetail.cleansedContent)) {
+            return false;
+        }
+
+        // Fallback to content-hash-based change detection to guard against upstream misses
+        Optional<com.apple.springboot.model.ContentHash> existingHash = Optional.empty();
+        if (itemDetail.usagePath != null) {
+            existingHash = contentHashRepository.findBySourcePathAndItemTypeAndUsagePath(
+                    itemDetail.sourcePath, itemDetail.originalFieldName, itemDetail.usagePath);
+        }
+        if (existingHash.isEmpty() && !strictUsagePath) {
+            existingHash = contentHashRepository.findBySourcePathAndItemType(
+                    itemDetail.sourcePath, itemDetail.originalFieldName);
+        }
+
+        if (existingHash.isEmpty()) {
+            return true;
+        }
+
+        boolean contentChanged = itemDetail.contentHash == null
+                || !Objects.equals(existingHash.get().getContentHash(), itemDetail.contentHash);
+
+        boolean contextChanged = considerContextChange && itemDetail.contextHash != null
+                && !Objects.equals(existingHash.get().getContextHash(), itemDetail.contextHash);
+
+        return contentChanged || contextChanged;
     }
 }
