@@ -73,6 +73,7 @@ public class AiPromptSearchService {
                 roleHint = aiJson.get("original_field_name").asText();
             }
             if (aiJson.hasNonNull("context") && aiJson.get("context").isObject()) {
+                // Convert AI context to Map, preserving structure including envelope.locale, envelope.country, envelope.language
                 @SuppressWarnings("unchecked")
                 Map<String, Object> ctx = objectMapper.convertValue(aiJson.get("context"), Map.class);
                 if (ctx != null) context.putAll(ctx);
@@ -81,7 +82,26 @@ public class AiPromptSearchService {
         if (request != null) {
             if (request.getTags() != null) tags.addAll(request.getTags());
             if (request.getKeywords() != null) keywords.addAll(request.getKeywords());
-            if (request.getContext() != null) context.putAll(request.getContext());
+            if (request.getContext() != null) {
+                // Merge request context, ensuring envelope fields are preserved
+                Map<String, Object> reqCtx = request.getContext();
+                if (reqCtx.containsKey("envelope")) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> reqEnvelope = (Map<String, Object>) reqCtx.get("envelope");
+                    if (reqEnvelope != null) {
+                        Map<String, Object> envelopeMap = new HashMap<>();
+                        if (context.containsKey("envelope") && context.get("envelope") instanceof Map) {
+                            @SuppressWarnings("unchecked")
+                            Map<String, Object> existing = (Map<String, Object>) context.get("envelope");
+                            envelopeMap.putAll(existing);
+                        }
+                        envelopeMap.putAll(reqEnvelope);
+                        context.put("envelope", envelopeMap);
+                    }
+                } else {
+                    context.putAll(reqCtx);
+                }
+            }
             if (StringUtils.hasText(request.getOriginal_field_name())) roleHint = request.getOriginal_field_name();
         }
         tags = tags.stream().filter(StringUtils::hasText).map(String::trim).distinct().collect(Collectors.toList());

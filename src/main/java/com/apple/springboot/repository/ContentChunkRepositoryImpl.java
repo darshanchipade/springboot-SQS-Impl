@@ -92,6 +92,12 @@ public class ContentChunkRepositoryImpl implements ContentChunkRepositoryCustom 
                 String paramName = String.join("_", newPath);
                 sql.append(" AND s.context #>> '").append(pathString).append("' IN (:").append(paramName).append(")");
                 params.put(paramName, (List<?>) entry.getValue());
+            } else if (entry.getValue() != null) {
+                // Handle string and other scalar values (locale, country, language, etc.)
+                String pathString = "{" + String.join(",", newPath) + "}";
+                String paramName = String.join("_", newPath);
+                sql.append(" AND LOWER(COALESCE(s.context#>>'").append(pathString).append("', '')) = LOWER(:").append(paramName).append(")");
+                params.put(paramName, entry.getValue().toString());
             }
         }
     }
