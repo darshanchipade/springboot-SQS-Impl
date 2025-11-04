@@ -501,7 +501,19 @@ public class ChatbotService {
             }
         }
         if (!criteria.countries.isEmpty()) {
-            if (country == null || !criteria.countries.contains(country)) {
+            boolean countryMatched = country != null && criteria.countries.contains(country);
+            if (!countryMatched) {
+                String uri = dto.getSectionUri();
+                String path = dto.getSectionPath();
+                for (String targetCountry : criteria.countries) {
+                    String needle = "_" + targetCountry;
+                    if ((uri != null && uri.contains(needle)) || (path != null && path.contains(needle))) {
+                        countryMatched = true;
+                        break;
+                    }
+                }
+            }
+            if (!countryMatched) {
                 return false;
             }
         }
