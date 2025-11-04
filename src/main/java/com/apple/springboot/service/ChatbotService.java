@@ -10,10 +10,12 @@ import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -73,6 +75,12 @@ public class ChatbotService {
                 enrichCriteriaFromContext(localeCriteria, request.getContext());
             }
 
+            Map<String, Object> localeContext = buildLocaleContext(localeCriteria);
+            Map<String, Object> effectiveContext = mergeContextFilters(
+                    request != null ? request.getContext() : null,
+                    localeContext
+            );
+
             // Vector: do NOT hard-filter by original_field_name to allow partial queries
             List<ContentChunkWithDistance> results = vectorSearchService.search(
                     embeddingQuery,
@@ -80,7 +88,7 @@ public class ChatbotService {
                     vectorPreLimit,
                     request != null ? request.getTags() : null,
                     request != null ? request.getKeywords() : null,
-                    request != null ? request.getContext() : null,
+                    effectiveContext.isEmpty() ? null : effectiveContext,
                     null // threshold
             );
 
@@ -513,6 +521,102 @@ public class ChatbotService {
         LOCALE,
         COUNTRY,
         LANGUAGE
+    }
+
+    private Map<String, Object> buildLocaleContext(LocaleCriteria criteria) {
+        if (criteria == null || criteria.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Map<String, Object> envelope = new LinkedHashMap<>();
+        if (!criteria.locales.isEmpty()) {
+            envelope.put("locale", new ArrayList<>(criteria.locales));
+        }
+        if (!criteria.countries.isEmpty()) {
+            envelope.put("country", new ArrayList<>(criteria.countries));
+        }
+        if (!criteria.languages.isEmpty()) {
+            envelope.put("language", new ArrayList<>(criteria.languages));
+        }
+        if (envelope.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Map<String, Object> filter = new LinkedHashMap<>();
+        filter.put("envelope", envelope);
+        return filter;
+    }
+
+    private Map<String, Object> mergeContextFilters(Map<String, Object> base, Map<String, Object> addition) {
+        boolean baseEmpty = base == null || base.isEmpty();
+        boolean additionEmpty = addition == null || addition.isEmpty();
+        if (baseEmpty && additionEmpty) {
+            return Collections.emptyMap();
+        }
+        Map<String, Object> merged = new LinkedHashMap<>();
+        if (!baseEmpty) {
+            base.forEach((k, v) -> merged.put(k, cloneContextValue(v)));
+        }
+        if (!additionEmpty) {
+            addition.forEach((k, v) -> merged.merge(k, cloneContextValue(v), this::mergeContextValues));
+        }
+        return merged;
+    }
+
+    private Object cloneContextValue(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> copy = new LinkedHashMap<>();
+            map.forEach((k, v) -> copy.put(String.valueOf(k), cloneContextValue(v)));
+            return copy;
+        }
+        if (value instanceof Collection<?> collection) {
+            List<String> copy = new ArrayList<>();
+            for (Object item : collection) {
+                if (item != null) {
+                    copy.add(item.toString());
+                }
+            }
+            return copy;
+        }
+        return value;
+    }
+
+    private Object mergeContextValues(Object existing, Object addition) {
+        if (existing instanceof Map<?, ?> existingMap && addition instanceof Map<?, ?> additionMap) {
+            Map<String, Object> result = new LinkedHashMap<>();
+            existingMap.forEach((k, v) -> result.put(String.valueOf(k), cloneContextValue(v)));
+            additionMap.forEach((k, v) -> result.merge(String.valueOf(k), cloneContextValue(v), this::mergeContextValues));
+            return result;
+        }
+        if (existing instanceof Collection<?> existingCollection || addition instanceof Collection<?> additionCollection) {
+            LinkedHashSet<String> combined = new LinkedHashSet<>();
+            if (existingCollection != null) {
+                for (Object item : existingCollection) {
+                    if (item != null) combined.add(item.toString());
+                }
+            } else if (existing != null) {
+                combined.add(existing.toString());
+            }
+            if (additionCollection != null) {
+                for (Object item : additionCollection) {
+                    if (item != null) combined.add(item.toString());
+                }
+            } else if (addition != null) {
+                combined.add(addition.toString());
+            }
+            return new ArrayList<>(combined);
+        }
+        if (existing == null) {
+            return addition;
+        }
+        if (addition == null) {
+            return existing;
+        }
+        if (existing.equals(addition)) {
+            return existing;
+        }
+        LinkedHashSet<String> combined = new LinkedHashSet<>();
+        combined.add(existing.toString());
+        combined.add(addition.toString());
+        return new ArrayList<>(combined);
     }
 
     private static Map<String, String> buildCountryNameIndex() {
