@@ -47,27 +47,11 @@ public class SearchController {
 
         // Transform the results into the DTO expected by the frontend
         return results.stream().map(result -> {
-            com.apple.springboot.model.ConsolidatedEnrichedSection section = result.getContentChunk().getConsolidatedEnrichedSection();
             return new SearchResultDto(
-                    section.getCleansedText(),
-                    section.getOriginalFieldName(),
-                    section.getSectionUri(),
-                    getEnvelopeValue(section, "locale"),
-                    getEnvelopeValue(section, "country"),
-                    getEnvelopeValue(section, "language")
+                    result.getContentChunk().getConsolidatedEnrichedSection().getCleansedText(),
+                    result.getContentChunk().getConsolidatedEnrichedSection().getOriginalFieldName(),
+                    result.getContentChunk().getConsolidatedEnrichedSection().getSectionUri()
             );
         }).collect(Collectors.toList());
-    }
-
-    private String getEnvelopeValue(com.apple.springboot.model.ConsolidatedEnrichedSection section, String key) {
-        if (section == null || section.getContext() == null) {
-            return null;
-        }
-        Object envelope = section.getContext().get("envelope");
-        if (envelope instanceof java.util.Map<?, ?> envMap) {
-            Object value = envMap.get(key);
-            return value != null ? value.toString() : null;
-        }
-        return null;
     }
 }

@@ -76,8 +76,11 @@ public class ChatbotService {
                         dto.setContentRole(section.getOriginalFieldName());
                         dto.setLastModified(section.getSavedAt() != null ? section.getSavedAt().toString() : null);
                         dto.setMatchTerms(List.of(sectionKeyFinal));
-                        // enrich with page, tenant, locale
-                        dto.setLocale(extractLocale(section));
+                          // enrich with page, tenant, locale + derived language/country
+                          String locale = extractLocale(section);
+                          dto.setLocale(locale);
+                          dto.setCountry(extractCountry(section, locale));
+                          dto.setLanguage(extractLanguage(section, locale));
                         dto.setTenant(extractTenant(section));
                         dto.setPageId(extractPageId(section));
                         return dto;
@@ -120,7 +123,10 @@ public class ChatbotService {
                         dto.setContentRole(section.getOriginalFieldName());
                         dto.setLastModified(section.getSavedAt() != null ? section.getSavedAt().toString() : null);
                         dto.setMatchTerms(List.of(sectionKeyFinal));
-                        dto.setLocale(extractLocale(section));
+                          String locale = extractLocale(section);
+                          dto.setLocale(locale);
+                          dto.setCountry(extractCountry(section, locale));
+                          dto.setLanguage(extractLanguage(section, locale));
                         dto.setTenant(extractTenant(section));
                         dto.setPageId(extractPageId(section));
                         return dto;
@@ -189,26 +195,48 @@ public class ChatbotService {
     }
 
     private String extractLocale(ConsolidatedEnrichedSection s) {
-        if (s.getContext() != null) {
-            Object env = s.getContext().get("envelope");
-            if (env instanceof Map<?,?> m) {
-                Object loc = m.get("locale");
-                if (loc instanceof String str && StringUtils.hasText(str)) return str;
-            }
-        }
+          String fromContext = getEnvelopeValue(s, "locale");
+          if (StringUtils.hasText(fromContext)) {
+              return fromContext;
+          }
         String fromPath = extractLocaleFromPath(s.getSectionUri());
         if (fromPath == null) fromPath = extractLocaleFromPath(s.getSectionPath());
         return fromPath;
     }
 
+      private String extractLanguage(ConsolidatedEnrichedSection s, String localeFallback) {
+          String fromContext = getEnvelopeValue(s, "language");
+          if (StringUtils.hasText(fromContext)) {
+              return fromContext;
+          }
+          if (StringUtils.hasText(localeFallback)) {
+              int idx = localeFallback.indexOf('_');
+              if (idx > 0) {
+                  return localeFallback.substring(0, idx);
+              }
+          }
+          return null;
+      }
+
+      private String extractCountry(ConsolidatedEnrichedSection s, String localeFallback) {
+          String fromContext = getEnvelopeValue(s, "country");
+          if (StringUtils.hasText(fromContext)) {
+              return fromContext;
+          }
+          if (StringUtils.hasText(localeFallback)) {
+              int idx = localeFallback.indexOf('_');
+              if (idx >= 0 && idx + 1 < localeFallback.length()) {
+                  return localeFallback.substring(idx + 1);
+              }
+          }
+          return null;
+      }
+
     private String extractTenant(ConsolidatedEnrichedSection s) {
-        if (s.getContext() != null) {
-            Object env = s.getContext().get("envelope");
-            if (env instanceof Map<?,?> m) {
-                Object ten = m.get("tenant");
-                if (ten instanceof String str && StringUtils.hasText(str)) return str;
-            }
-        }
+          String fromContext = getEnvelopeValue(s, "tenant");
+          if (StringUtils.hasText(fromContext)) {
+              return fromContext;
+          }
         String fromUri = extractTenantFromPath(s.getSectionUri());
         if (fromUri != null) return fromUri;
         String fromPath = extractTenantFromPath(s.getSectionPath());
@@ -248,4 +276,18 @@ public class ChatbotService {
         if (m.find()) return m.group(1);
         return null;
     }
+
+      private String getEnvelopeValue(ConsolidatedEnrichedSection section, String key) {
+          if (section == null || section.getContext() == null) {
+              return null;
+          }
+          Object envelope = section.getContext().get("envelope");
+          if (envelope instanceof Map<?,?> map) {
+              Object value = map.get(key);
+              if (value instanceof String str && StringUtils.hasText(str)) {
+                  return str;
+              }
+          }
+          return null;
+      }
 }
