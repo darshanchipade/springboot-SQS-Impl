@@ -468,9 +468,32 @@ public class ChatbotService {
     }
 
     private boolean matchesLocaleCriteria(ChatbotResultDto dto, LocaleCriteria criteria) {
+        if (criteria == null || criteria.isEmpty()) {
+            return true;
+        }
+
         String locale = normalizeLocale(dto.getLocale());
+        if (locale == null) {
+            locale = normalizeLocale(extractLocaleFromPath(dto.getSectionUri()));
+            if (locale == null) {
+                locale = normalizeLocale(extractLocaleFromPath(dto.getSectionPath()));
+            }
+        }
+
         String country = dto.getCountry() != null ? mapCountryCode(dto.getCountry()) : null;
         String language = dto.getLanguage() != null ? dto.getLanguage().toLowerCase(Locale.ROOT) : null;
+
+        if (locale != null) {
+            int idx = locale.indexOf('_');
+            if (idx > 0) {
+                if (language == null) {
+                    language = locale.substring(0, idx);
+                }
+                if (country == null) {
+                    country = locale.substring(idx + 1);
+                }
+            }
+        }
 
         if (!criteria.locales.isEmpty()) {
             if (locale == null || !criteria.locales.contains(locale)) {
