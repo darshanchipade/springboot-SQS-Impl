@@ -9,6 +9,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -28,23 +31,17 @@ public class ChatbotService {
             Pattern.compile("(?i)\\b([a-z0-9]+(?:-[a-z0-9]+)*)-section(?:-[a-z0-9]+)*\\b");
     private static final Pattern LOCALE_PATTERN =
             Pattern.compile("(?i)\\b([a-z]{2})[-_]([a-z]{2})\\b");
-    private static final Set<String> SUPPORTED_LANGUAGE_CODES = Set.of(
-            "en", "fr", "de", "es", "it", "ja", "ko", "pt", "zh", "nl"
+    private static final Set<String> ISO_LANGUAGE_CODES = Collections.unmodifiableSet(
+            Arrays.stream(Locale.getISOLanguages())
+                    .map(code -> code.toLowerCase(Locale.ROOT))
+                    .collect(Collectors.toSet())
     );
-    private static final Set<String> SUPPORTED_COUNTRY_CODES = Set.of(
-            "US", "CA", "GB", "UK", "FR", "DE", "ES", "IT", "JP", "CN", "AU", "NZ", "IN", "MX", "BR"
+    private static final Set<String> ISO_COUNTRY_CODES = Collections.unmodifiableSet(
+            Arrays.stream(Locale.getISOCountries())
+                    .map(code -> code.toUpperCase(Locale.ROOT))
+                    .collect(Collectors.toSet())
     );
-    private static final Map<String, String> COUNTRY_NAME_TO_CODE = Map.ofEntries(
-            Map.entry("united states", "US"),
-            Map.entry("usa", "US"),
-            Map.entry("america", "US"),
-            Map.entry("canada", "CA"),
-            Map.entry("australia", "AU"),
-            Map.entry("united kingdom", "GB"),
-            Map.entry("great britain", "GB"),
-            Map.entry("britain", "GB"),
-            Map.entry("uk", "GB")
-    );
+    private static final Map<String, String> COUNTRY_NAME_INDEX = buildCountryNameIndex();
 
     public ChatbotService(VectorSearchService vectorSearchService,
                           ConsolidatedEnrichedSectionRepository consolidatedRepo) {
@@ -336,9 +333,11 @@ public class ChatbotService {
         String trimmed = raw.trim().replace('-', '_');
         String[] parts = trimmed.split("_");
         if (parts.length == 2) {
-            return parts[0].toLowerCase(Locale.ROOT) + "_" + parts[1].toUpperCase(Locale.ROOT);
+            String language = parts[0].toLowerCase(Locale.ROOT);
+            String country = parts[1].toUpperCase(Locale.ROOT);
+            return language + "_" + country;
         }
-        return trimmed.toLowerCase(Locale.ROOT);
+        return null;
     }
 
     private LocaleCriteria extractLocaleCriteria(String message) {
@@ -352,13 +351,15 @@ public class ChatbotService {
             String language = matcher.group(1).toLowerCase(Locale.ROOT);
             String country = matcher.group(2).toUpperCase(Locale.ROOT);
             String locale = language + "_" + country;
-            criteria.locales.add(locale);
-            criteria.languages.add(language);
-            criteria.countries.add(mapCountryCode(country));
+            if (ISO_LANGUAGE_CODES.contains(language) && ISO_COUNTRY_CODES.contains(country)) {
+                criteria.locales.add(locale);
+                criteria.languages.add(language);
+                criteria.countries.add(country);
+            }
         }
 
         String messageLower = message.toLowerCase(Locale.ROOT);
-        COUNTRY_NAME_TO_CODE.forEach((name, code) -> {
+        COUNTRY_NAME_INDEX.forEach((name, code) -> {
             if (messageLower.contains(name)) {
                 criteria.countries.add(code);
             }
@@ -369,15 +370,13 @@ public class ChatbotService {
             if (!StringUtils.hasText(token)) continue;
             String trimmed = token.trim();
             String lower = trimmed.toLowerCase(Locale.ROOT);
-            String upper = trimmed.toUpperCase(Locale.ROOT);
 
-            if (trimmed.length() == 2 && trimmed.equals(trimmed.toUpperCase(Locale.ROOT)) && SUPPORTED_COUNTRY_CODES.contains(mapCountryCode(upper))) {
-                criteria.countries.add(mapCountryCode(upper));
-            } else if (COUNTRY_NAME_TO_CODE.containsKey(lower)) {
-                criteria.countries.add(COUNTRY_NAME_TO_CODE.get(lower));
+            String mappedCountry = mapCountryCode(trimmed);
+            if (mappedCountry != null) {
+                criteria.countries.add(mappedCountry);
             }
 
-            if (SUPPORTED_LANGUAGE_CODES.contains(lower)) {
+            if (ISO_LANGUAGE_CODES.contains(lower)) {
                 criteria.languages.add(lower);
             }
         }
@@ -429,19 +428,22 @@ public class ChatbotService {
                     int idx = normalized.indexOf('_');
                     if (idx > 0) {
                         criteria.languages.add(normalized.substring(0, idx));
-                        criteria.countries.add(mapCountryCode(normalized.substring(idx + 1)));
+                        String mapped = mapCountryCode(normalized.substring(idx + 1));
+                        if (mapped != null) {
+                            criteria.countries.add(mapped);
+                        }
                     }
                 }
             }
             case COUNTRY -> {
-                String mapped = mapCountryCode(value.toUpperCase(Locale.ROOT));
-                if (SUPPORTED_COUNTRY_CODES.contains(mapped)) {
+                String mapped = mapCountryCode(value);
+                if (mapped != null) {
                     criteria.countries.add(mapped);
                 }
             }
             case LANGUAGE -> {
                 String lower = value.toLowerCase(Locale.ROOT);
-                if (SUPPORTED_LANGUAGE_CODES.contains(lower)) {
+                if (ISO_LANGUAGE_CODES.contains(lower)) {
                     criteria.languages.add(lower);
                 }
             }
@@ -459,7 +461,7 @@ public class ChatbotService {
 
     private boolean matchesLocaleCriteria(ChatbotResultDto dto, LocaleCriteria criteria) {
         String locale = normalizeLocale(dto.getLocale());
-        String country = dto.getCountry() != null ? mapCountryCode(dto.getCountry().toUpperCase(Locale.ROOT)) : null;
+        String country = dto.getCountry() != null ? mapCountryCode(dto.getCountry()) : null;
         String language = dto.getLanguage() != null ? dto.getLanguage().toLowerCase(Locale.ROOT) : null;
 
         if (!criteria.locales.isEmpty()) {
@@ -480,15 +482,21 @@ public class ChatbotService {
         return true;
     }
 
-    private String mapCountryCode(String code) {
-        if (!StringUtils.hasText(code)) {
-            return code;
+    private String mapCountryCode(String codeOrName) {
+        if (!StringUtils.hasText(codeOrName)) {
+            return null;
         }
-        String upper = code.toUpperCase(Locale.ROOT);
-        if ("UK".equals(upper)) {
-            return "GB";
+        String trimmed = codeOrName.trim();
+        String lower = trimmed.toLowerCase(Locale.ROOT);
+        String mapped = COUNTRY_NAME_INDEX.get(lower);
+        if (mapped != null) {
+            return mapped;
         }
-        return upper;
+        String upper = trimmed.toUpperCase(Locale.ROOT);
+        if (ISO_COUNTRY_CODES.contains(upper)) {
+            return upper;
+        }
+        return null;
     }
 
     private static class LocaleCriteria {
@@ -505,5 +513,53 @@ public class ChatbotService {
         LOCALE,
         COUNTRY,
         LANGUAGE
+    }
+
+    private static Map<String, String> buildCountryNameIndex() {
+        Map<String, String> index = new HashMap<>();
+        for (Locale locale : Locale.getAvailableLocales()) {
+            String country = locale.getCountry();
+            if (!StringUtils.hasText(country)) {
+                continue;
+            }
+            String code = country.toUpperCase(Locale.ROOT);
+            String english = locale.getDisplayCountry(Locale.ENGLISH);
+            if (StringUtils.hasText(english)) {
+                index.putIfAbsent(english.toLowerCase(Locale.ROOT), code);
+            }
+            String localName = locale.getDisplayCountry(locale);
+            if (StringUtils.hasText(localName)) {
+                index.putIfAbsent(localName.toLowerCase(Locale.ROOT), code);
+            }
+        }
+        for (String code : ISO_COUNTRY_CODES) {
+            index.putIfAbsent(code.toLowerCase(Locale.ROOT), code);
+        }
+        // Common synonyms and regional naming variations
+        index.put("usa", "US");
+        index.put("u.s.", "US");
+        index.put("u.s.a", "US");
+        index.put("america", "US");
+        index.put("united states", "US");
+        index.put("united states of america", "US");
+        index.put("uk", "GB");
+        index.put("united kingdom", "GB");
+        index.put("great britain", "GB");
+        index.put("britain", "GB");
+        index.put("south korea", "KR");
+        index.put("north korea", "KP");
+        index.put("korea", "KR");
+        index.put("hong kong", "HK");
+        index.put("macau", "MO");
+        index.put("mainland china", "CN");
+        index.put("people's republic of china", "CN");
+        index.put("czech republic", "CZ");
+        index.put("ivory coast", "CI");
+        index.put("uae", "AE");
+        index.put("united arab emirates", "AE");
+        index.put("republic of korea", "KR");
+        index.put("saudi arabia", "SA");
+        index.put("kingdom of saudi arabia", "SA");
+        return Collections.unmodifiableMap(index);
     }
 }
