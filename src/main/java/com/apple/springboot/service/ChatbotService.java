@@ -586,7 +586,9 @@ public class ChatbotService {
             additionMap.forEach((k, v) -> result.merge(String.valueOf(k), cloneContextValue(v), this::mergeContextValues));
             return result;
         }
-        if (existing instanceof Collection<?> existingCollection || addition instanceof Collection<?> additionCollection) {
+        Collection<?> existingCollection = existing instanceof Collection<?> ? (Collection<?>) existing : null;
+        Collection<?> additionCollection = addition instanceof Collection<?> ? (Collection<?>) addition : null;
+        if (existingCollection != null || additionCollection != null) {
             LinkedHashSet<String> combined = new LinkedHashSet<>();
             if (existingCollection != null) {
                 for (Object item : existingCollection) {
