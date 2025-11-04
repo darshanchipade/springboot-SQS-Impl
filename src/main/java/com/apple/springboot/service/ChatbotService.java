@@ -531,12 +531,6 @@ public class ChatbotService {
         if (!criteria.locales.isEmpty()) {
             envelope.put("locale", new ArrayList<>(criteria.locales));
         }
-        if (!criteria.countries.isEmpty()) {
-            envelope.put("country", new ArrayList<>(criteria.countries));
-        }
-        if (!criteria.languages.isEmpty()) {
-            envelope.put("language", new ArrayList<>(criteria.languages));
-        }
         if (envelope.isEmpty()) {
             return Collections.emptyMap();
         }
