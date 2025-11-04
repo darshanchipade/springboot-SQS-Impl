@@ -9,9 +9,15 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
-import java.util.Map;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -23,6 +29,19 @@ public class ChatbotService {
 
     private static final Pattern SECTION_KEY_PATTERN =
             Pattern.compile("(?i)\\b([a-z0-9]+(?:-[a-z0-9]+)*)-section(?:-[a-z0-9]+)*\\b");
+    private static final Pattern LOCALE_PATTERN =
+            Pattern.compile("(?i)\\b([a-z]{2})[-_]([a-z]{2})\\b");
+    private static final Set<String> ISO_LANGUAGE_CODES = Collections.unmodifiableSet(
+            Arrays.stream(Locale.getISOLanguages())
+                    .map(code -> code.toLowerCase(Locale.ROOT))
+                    .collect(Collectors.toSet())
+    );
+    private static final Set<String> ISO_COUNTRY_CODES = Collections.unmodifiableSet(
+            Arrays.stream(Locale.getISOCountries())
+                    .map(code -> code.toUpperCase(Locale.ROOT))
+                    .collect(Collectors.toSet())
+    );
+    private static final Map<String, String> COUNTRY_NAME_INDEX = buildCountryNameIndex();
 
     public ChatbotService(VectorSearchService vectorSearchService,
                           ConsolidatedEnrichedSectionRepository consolidatedRepo) {
@@ -49,6 +68,10 @@ public class ChatbotService {
         try {
             String message = request != null ? request.getMessage() : null;
             String embeddingQuery = StringUtils.hasText(message) ? message : key;
+            LocaleCriteria localeCriteria = extractLocaleCriteria(message);
+            if (request != null && request.getContext() != null) {
+                enrichCriteriaFromContext(localeCriteria, request.getContext());
+            }
 
             // Vector: do NOT hard-filter by original_field_name to allow partial queries
             List<ContentChunkWithDistance> results = vectorSearchService.search(
@@ -76,13 +99,18 @@ public class ChatbotService {
                         dto.setContentRole(section.getOriginalFieldName());
                         dto.setLastModified(section.getSavedAt() != null ? section.getSavedAt().toString() : null);
                         dto.setMatchTerms(List.of(sectionKeyFinal));
-                        // enrich with page, tenant, locale
-                        dto.setLocale(extractLocale(section));
+                        // enrich with page, tenant, locale + derived language/country
+                        String locale = extractLocale(section);
+                        dto.setLocale(locale);
+                        dto.setCountry(extractCountry(section, locale));
+                        dto.setLanguage(extractLanguage(section, locale));
                         dto.setTenant(extractTenant(section));
                         dto.setPageId(extractPageId(section));
                         return dto;
                     })
                     .collect(Collectors.toList());
+
+            vectorDtos = applyLocaleFilter(vectorDtos, localeCriteria);
 
             // Post-filter vector by partial role (case-insensitive) when provided
             if (hasRoleQuery) {
@@ -120,12 +148,17 @@ public class ChatbotService {
                         dto.setContentRole(section.getOriginalFieldName());
                         dto.setLastModified(section.getSavedAt() != null ? section.getSavedAt().toString() : null);
                         dto.setMatchTerms(List.of(sectionKeyFinal));
-                        dto.setLocale(extractLocale(section));
+                        String locale = extractLocale(section);
+                        dto.setLocale(locale);
+                        dto.setCountry(extractCountry(section, locale));
+                        dto.setLanguage(extractLanguage(section, locale));
                         dto.setTenant(extractTenant(section));
                         dto.setPageId(extractPageId(section));
                         return dto;
                     })
                     .collect(Collectors.toList());
+
+            consolidatedDtos = applyLocaleFilter(consolidatedDtos, localeCriteria);
 
             // Merge vector-first, then consolidated; dedupe by section_path + content_role
             LinkedHashMap<String, ChatbotResultDto> merged = new LinkedHashMap<>();
@@ -189,25 +222,55 @@ public class ChatbotService {
     }
 
     private String extractLocale(ConsolidatedEnrichedSection s) {
-        if (s.getContext() != null) {
-            Object env = s.getContext().get("envelope");
-            if (env instanceof Map<?,?> m) {
-                Object loc = m.get("locale");
-                if (loc instanceof String str && StringUtils.hasText(str)) return str;
-            }
+        String fromContext = normalizeLocale(getEnvelopeValue(s, "locale"));
+        if (StringUtils.hasText(fromContext)) {
+            return fromContext;
         }
-        String fromPath = extractLocaleFromPath(s.getSectionUri());
-        if (fromPath == null) fromPath = extractLocaleFromPath(s.getSectionPath());
+        String fromPath = normalizeLocale(extractLocaleFromPath(s.getSectionUri()));
+        if (fromPath == null) fromPath = normalizeLocale(extractLocaleFromPath(s.getSectionPath()));
         return fromPath;
     }
 
-    private String extractTenant(ConsolidatedEnrichedSection s) {
-        if (s.getContext() != null) {
-            Object env = s.getContext().get("envelope");
-            if (env instanceof Map<?,?> m) {
-                Object ten = m.get("tenant");
-                if (ten instanceof String str && StringUtils.hasText(str)) return str;
+    private String extractLanguage(ConsolidatedEnrichedSection s, String localeFallback) {
+        String fromContext = getEnvelopeValue(s, "language");
+        if (StringUtils.hasText(fromContext)) {
+            return fromContext.toLowerCase(Locale.ROOT);
+        }
+        if (StringUtils.hasText(localeFallback)) {
+            String normalized = normalizeLocale(localeFallback);
+            if (!StringUtils.hasText(normalized)) {
+                return null;
             }
+            int idx = normalized.indexOf('_');
+            if (idx > 0) {
+                return normalized.substring(0, idx).toLowerCase(Locale.ROOT);
+            }
+        }
+        return null;
+    }
+
+    private String extractCountry(ConsolidatedEnrichedSection s, String localeFallback) {
+        String fromContext = getEnvelopeValue(s, "country");
+        if (StringUtils.hasText(fromContext)) {
+            return fromContext.toUpperCase(Locale.ROOT);
+        }
+        if (StringUtils.hasText(localeFallback)) {
+            String normalized = normalizeLocale(localeFallback);
+            if (!StringUtils.hasText(normalized)) {
+                return null;
+            }
+            int idx = normalized.indexOf('_');
+            if (idx >= 0 && idx + 1 < normalized.length()) {
+                return normalized.substring(idx + 1).toUpperCase(Locale.ROOT);
+            }
+        }
+        return null;
+    }
+
+    private String extractTenant(ConsolidatedEnrichedSection s) {
+        String fromContext = getEnvelopeValue(s, "tenant");
+        if (StringUtils.hasText(fromContext)) {
+            return fromContext;
         }
         String fromUri = extractTenantFromPath(s.getSectionUri());
         if (fromUri != null) return fromUri;
@@ -247,5 +310,256 @@ public class ChatbotService {
                 .matcher(path);
         if (m.find()) return m.group(1);
         return null;
+    }
+
+    private String getEnvelopeValue(ConsolidatedEnrichedSection section, String key) {
+        if (section == null || section.getContext() == null) {
+            return null;
+        }
+        Object envelope = section.getContext().get("envelope");
+        if (envelope instanceof Map<?,?> map) {
+            Object value = map.get(key);
+            if (value instanceof String str && StringUtils.hasText(str)) {
+                return str;
+            }
+        }
+        return null;
+    }
+
+    private String normalizeLocale(String raw) {
+        if (!StringUtils.hasText(raw)) {
+            return null;
+        }
+        String trimmed = raw.trim().replace('-', '_');
+        String[] parts = trimmed.split("_");
+        if (parts.length == 2) {
+            String language = parts[0].toLowerCase(Locale.ROOT);
+            String country = parts[1].toUpperCase(Locale.ROOT);
+            return language + "_" + country;
+        }
+        return null;
+    }
+
+    private LocaleCriteria extractLocaleCriteria(String message) {
+        LocaleCriteria criteria = new LocaleCriteria();
+        if (!StringUtils.hasText(message)) {
+            return criteria;
+        }
+
+        Matcher matcher = LOCALE_PATTERN.matcher(message);
+        while (matcher.find()) {
+            String language = matcher.group(1).toLowerCase(Locale.ROOT);
+            String country = matcher.group(2).toUpperCase(Locale.ROOT);
+            String locale = language + "_" + country;
+            if (ISO_LANGUAGE_CODES.contains(language) && ISO_COUNTRY_CODES.contains(country)) {
+                criteria.locales.add(locale);
+                criteria.languages.add(language);
+                criteria.countries.add(country);
+            }
+        }
+
+        String messageLower = message.toLowerCase(Locale.ROOT);
+        COUNTRY_NAME_INDEX.forEach((name, code) -> {
+            if (messageLower.contains(name)) {
+                criteria.countries.add(code);
+            }
+        });
+
+        String[] tokens = message.split("[^A-Za-z0-9_]+");
+        for (String token : tokens) {
+            if (!StringUtils.hasText(token)) continue;
+            String trimmed = token.trim();
+            String lower = trimmed.toLowerCase(Locale.ROOT);
+
+            String mappedCountry = mapCountryCode(trimmed);
+            if (mappedCountry != null) {
+                criteria.countries.add(mappedCountry);
+            }
+
+            if (ISO_LANGUAGE_CODES.contains(lower)) {
+                criteria.languages.add(lower);
+            }
+        }
+
+        return criteria;
+    }
+
+    private void enrichCriteriaFromContext(LocaleCriteria criteria, Map<String, Object> context) {
+        if (context == null || context.isEmpty()) {
+            return;
+        }
+        addContextValue(criteria, context.get("locale"), ValueType.LOCALE);
+        addContextValue(criteria, context.get("country"), ValueType.COUNTRY);
+        addContextValue(criteria, context.get("language"), ValueType.LANGUAGE);
+
+        Object envelope = context.get("envelope");
+        if (envelope instanceof Map<?, ?> envMap) {
+            Map<?, ?> env = envMap;
+            addContextValue(criteria, env.get("locale"), ValueType.LOCALE);
+            addContextValue(criteria, env.get("country"), ValueType.COUNTRY);
+            addContextValue(criteria, env.get("language"), ValueType.LANGUAGE);
+        }
+    }
+
+    private void addContextValue(LocaleCriteria criteria, Object value, ValueType type) {
+        if (value == null) {
+            return;
+        }
+        if (value instanceof String str) {
+            addValue(criteria, str, type);
+        } else if (value instanceof Iterable<?> iterable) {
+            for (Object item : iterable) {
+                if (item instanceof String strItem) {
+                    addValue(criteria, strItem, type);
+                }
+            }
+        }
+    }
+
+    private void addValue(LocaleCriteria criteria, String value, ValueType type) {
+        if (!StringUtils.hasText(value)) {
+            return;
+        }
+        switch (type) {
+            case LOCALE -> {
+                String normalized = normalizeLocale(value);
+                if (StringUtils.hasText(normalized)) {
+                    criteria.locales.add(normalized);
+                    int idx = normalized.indexOf('_');
+                    if (idx > 0) {
+                        criteria.languages.add(normalized.substring(0, idx));
+                        String mapped = mapCountryCode(normalized.substring(idx + 1));
+                        if (mapped != null) {
+                            criteria.countries.add(mapped);
+                        }
+                    }
+                }
+            }
+            case COUNTRY -> {
+                String mapped = mapCountryCode(value);
+                if (mapped != null) {
+                    criteria.countries.add(mapped);
+                }
+            }
+            case LANGUAGE -> {
+                String lower = value.toLowerCase(Locale.ROOT);
+                if (ISO_LANGUAGE_CODES.contains(lower)) {
+                    criteria.languages.add(lower);
+                }
+            }
+        }
+    }
+
+    private List<ChatbotResultDto> applyLocaleFilter(List<ChatbotResultDto> dtos, LocaleCriteria criteria) {
+        if (criteria == null || criteria.isEmpty()) {
+            return dtos;
+        }
+        return dtos.stream()
+                .filter(dto -> matchesLocaleCriteria(dto, criteria))
+                .collect(Collectors.toList());
+    }
+
+    private boolean matchesLocaleCriteria(ChatbotResultDto dto, LocaleCriteria criteria) {
+        String locale = normalizeLocale(dto.getLocale());
+        String country = dto.getCountry() != null ? mapCountryCode(dto.getCountry()) : null;
+        String language = dto.getLanguage() != null ? dto.getLanguage().toLowerCase(Locale.ROOT) : null;
+
+        if (!criteria.locales.isEmpty()) {
+            if (locale == null || !criteria.locales.contains(locale)) {
+                return false;
+            }
+        }
+        if (!criteria.countries.isEmpty()) {
+            if (country == null || !criteria.countries.contains(country)) {
+                return false;
+            }
+        }
+        if (!criteria.languages.isEmpty()) {
+            if (language == null || !criteria.languages.contains(language)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private String mapCountryCode(String codeOrName) {
+        if (!StringUtils.hasText(codeOrName)) {
+            return null;
+        }
+        String trimmed = codeOrName.trim();
+        String lower = trimmed.toLowerCase(Locale.ROOT);
+        String mapped = COUNTRY_NAME_INDEX.get(lower);
+        if (mapped != null) {
+            return mapped;
+        }
+        String upper = trimmed.toUpperCase(Locale.ROOT);
+        if (ISO_COUNTRY_CODES.contains(upper)) {
+            return upper;
+        }
+        return null;
+    }
+
+    private static class LocaleCriteria {
+        private final Set<String> locales = new HashSet<>();
+        private final Set<String> countries = new HashSet<>();
+        private final Set<String> languages = new HashSet<>();
+
+        boolean isEmpty() {
+            return locales.isEmpty() && countries.isEmpty() && languages.isEmpty();
+        }
+    }
+
+    private enum ValueType {
+        LOCALE,
+        COUNTRY,
+        LANGUAGE
+    }
+
+    private static Map<String, String> buildCountryNameIndex() {
+        Map<String, String> index = new HashMap<>();
+        for (Locale locale : Locale.getAvailableLocales()) {
+            String country = locale.getCountry();
+            if (!StringUtils.hasText(country)) {
+                continue;
+            }
+            String code = country.toUpperCase(Locale.ROOT);
+            String english = locale.getDisplayCountry(Locale.ENGLISH);
+            if (StringUtils.hasText(english)) {
+                index.putIfAbsent(english.toLowerCase(Locale.ROOT), code);
+            }
+            String localName = locale.getDisplayCountry(locale);
+            if (StringUtils.hasText(localName)) {
+                index.putIfAbsent(localName.toLowerCase(Locale.ROOT), code);
+            }
+        }
+        for (String code : ISO_COUNTRY_CODES) {
+            index.putIfAbsent(code.toLowerCase(Locale.ROOT), code);
+        }
+        // Common synonyms and regional naming variations
+        index.put("usa", "US");
+        index.put("u.s.", "US");
+        index.put("u.s.a", "US");
+        index.put("america", "US");
+        index.put("united states", "US");
+        index.put("united states of america", "US");
+        index.put("uk", "GB");
+        index.put("united kingdom", "GB");
+        index.put("great britain", "GB");
+        index.put("britain", "GB");
+        index.put("south korea", "KR");
+        index.put("north korea", "KP");
+        index.put("korea", "KR");
+        index.put("hong kong", "HK");
+        index.put("macau", "MO");
+        index.put("mainland china", "CN");
+        index.put("people's republic of china", "CN");
+        index.put("czech republic", "CZ");
+        index.put("ivory coast", "CI");
+        index.put("uae", "AE");
+        index.put("united arab emirates", "AE");
+        index.put("republic of korea", "KR");
+        index.put("saudi arabia", "SA");
+        index.put("kingdom of saudi arabia", "SA");
+        return Collections.unmodifiableMap(index);
     }
 }

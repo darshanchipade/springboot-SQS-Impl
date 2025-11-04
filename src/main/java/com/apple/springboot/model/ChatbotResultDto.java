@@ -35,6 +35,12 @@ public class ChatbotResultDto {
     @JsonProperty("locale")
     private String locale; // e.g., en_US
 
+    @JsonProperty("country")
+    private String country;
+
+    @JsonProperty("language")
+    private String language;
+
     public <T> ChatbotResultDto(String originalFieldName, String s, String sectionPath, String sectionUri, String chunkText, String source, String originalFieldName1, int rank, double distance, String string, String lastModified, List<T> ts) {
     }
 
