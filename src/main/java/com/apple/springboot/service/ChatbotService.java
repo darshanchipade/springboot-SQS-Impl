@@ -33,12 +33,6 @@ public class ChatbotService {
             Pattern.compile("(?i)\\b([a-z0-9]+(?:-[a-z0-9]+)*)-section(?:-[a-z0-9]+)*\\b");
     private static final Pattern LOCALE_PATTERN =
             Pattern.compile("(?i)\\b([a-z]{2})[-_]([a-z]{2})\\b");
-    private static final Set<String> STOP_WORDS = Set.of(
-            "give", "me", "all", "the", "content", "for", "please", "show", "accessibility",
-            "accessibilitytext", "text", "copy", "section", "sections", "ribbon", "and", "or", "with", "get",
-            "need", "want", "results", "data", "information", "info", "help", "list", "of", "to",
-            "an", "a", "on", "in", "by", "from"
-    );
     private static final Set<String> ISO_LANGUAGE_CODES = Collections.unmodifiableSet(
             Arrays.stream(Locale.getISOLanguages())
                     .map(code -> code.toLowerCase(Locale.ROOT))
@@ -219,6 +213,10 @@ public class ChatbotService {
                 mergedList = mergedList.subList(0, limit);
             }
 
+            String inferredLocale = localeCriteria.locales.isEmpty() ? null : localeCriteria.locales.iterator().next();
+            String inferredCountry = localeCriteria.countries.isEmpty() ? null : localeCriteria.countries.iterator().next();
+            String inferredLanguage = localeCriteria.languages.isEmpty() ? null : localeCriteria.languages.iterator().next();
+
             // Assign cf ids; enrich match_terms with tags/keywords and role if provided
             for (int i = 0; i < mergedList.size(); i++) {
                 ChatbotResultDto item = mergedList.get(i);
@@ -226,11 +224,46 @@ public class ChatbotService {
 
                 var terms = new java.util.LinkedHashSet<String>();
                 terms.add(sectionKeyFinal);
-                if (hasRoleQuery) terms.add(request.getOriginal_field_name());
-                if (request != null && request.getTags() != null) terms.addAll(request.getTags());
-                if (request != null && request.getKeywords() != null) terms.addAll(request.getKeywords());
-                if (!localeCriteria.pageIds.isEmpty()) terms.addAll(localeCriteria.pageIds);
+                if (hasRoleQuery) {
+                    terms.add(request.getOriginal_field_name());
+                }
+                if (request != null && request.getTags() != null) {
+                    terms.addAll(request.getTags());
+                }
+                if (request != null && request.getKeywords() != null) {
+                    terms.addAll(request.getKeywords());
+                }
+                if (!localeCriteria.pageIds.isEmpty()) {
+                    terms.addAll(localeCriteria.pageIds);
+                }
                 item.setMatchTerms(new ArrayList<>(terms));
+
+                if (!StringUtils.hasText(item.getLocale()) && StringUtils.hasText(inferredLocale)) {
+                    item.setLocale(inferredLocale);
+                }
+                if (!StringUtils.hasText(item.getCountry()) && StringUtils.hasText(inferredCountry)) {
+                    item.setCountry(inferredCountry);
+                }
+                if (!StringUtils.hasText(item.getLanguage()) && StringUtils.hasText(inferredLanguage)) {
+                    item.setLanguage(inferredLanguage);
+                }
+
+                if (StringUtils.hasText(item.getLocale())) {
+                    String normalized = normalizeLocale(item.getLocale());
+                    if (StringUtils.hasText(normalized)) {
+                        int idx = normalized.indexOf('_');
+                        if (idx > 0) {
+                            String langPart = normalized.substring(0, idx);
+                            String countryPart = normalized.substring(idx + 1);
+                            if (!StringUtils.hasText(item.getLanguage())) {
+                                item.setLanguage(langPart);
+                            }
+                            if (!StringUtils.hasText(item.getCountry())) {
+                                item.setCountry(countryPart);
+                            }
+                        }
+                    }
+                }
             }
 
             return mergedList;
@@ -445,19 +478,13 @@ public class ChatbotService {
             }
 
             String mappedCountry = mapCountryCode(trimmed);
-            boolean recognized = false;
             if (mappedCountry != null) {
                 criteria.countries.add(mappedCountry);
-                recognized = true;
+                continue;
             }
 
             if (ISO_LANGUAGE_CODES.contains(lower)) {
                 criteria.languages.add(lower);
-                recognized = true;
-            }
-
-            if (!recognized && isPotentialPageIdToken(lower)) {
-                criteria.pageIds.add(lower);
             }
         }
 
@@ -537,7 +564,7 @@ public class ChatbotService {
             }
             case PAGE_ID -> {
                 String lower = value.toLowerCase(Locale.ROOT);
-                if (!lower.isBlank() && !STOP_WORDS.contains(lower)) {
+                if (!lower.isBlank()) {
                     criteria.pageIds.add(lower);
                 }
             }
