@@ -690,32 +690,6 @@ public class ChatbotService {
         return null;
     }
 
-    private boolean isPotentialPageIdToken(String token) {
-        if (!StringUtils.hasText(token)) {
-            return false;
-        }
-        String lower = token.toLowerCase(Locale.ROOT);
-        if (STOP_WORDS.contains(lower)) {
-            return false;
-        }
-        if (lower.length() < 3 || lower.length() > 40) {
-            return false;
-        }
-        if (lower.contains("-") || lower.contains("'") || lower.contains("_")) {
-            return false;
-        }
-        if (lower.endsWith("section") || lower.endsWith("sections")) {
-            return false;
-        }
-        for (int i = 0; i < lower.length(); i++) {
-            char c = lower.charAt(i);
-            if (!Character.isLetterOrDigit(c)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
     private static class LocaleCriteria {
         private final Set<String> locales = new HashSet<>();
         private final Set<String> countries = new HashSet<>();
