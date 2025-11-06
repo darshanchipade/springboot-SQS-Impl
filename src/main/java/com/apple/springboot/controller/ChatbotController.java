@@ -34,13 +34,13 @@ public class ChatbotController {
     }
 
     // Optional: explicit AI endpoint (same behavior)
-    @PostMapping("/ai-search")
-    public ResponseEntity<List<ChatbotResultDto>> aiSearch(@RequestBody ChatbotRequest request) {
-        if (request == null || !StringUtils.hasText(request.getMessage())) {
-            return ResponseEntity.badRequest().body(Collections.emptyList());
-        }
-        return ResponseEntity.ok(aiPromptSearchService.aiSearch(request));
-    }
+//    @PostMapping("/ai-search")
+//    public ResponseEntity<List<ChatbotResultDto>> aiSearch(@RequestBody ChatbotRequest request) {
+//        if (request == null || !StringUtils.hasText(request.getMessage())) {
+//            return ResponseEntity.badRequest().body(Collections.emptyList());
+//        }
+//        return ResponseEntity.ok(aiPromptSearchService.aiSearch(request));
+//    }
 
     // Optional: legacy behavior if you need it for comparison
     @PostMapping("/query-legacy")
