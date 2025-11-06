@@ -674,6 +674,19 @@ public class ChatbotService {
         if (ISO_COUNTRY_CODES.contains(upper)) {
             return upper;
         }
+        // fall back: use second segment if present (works for en_CA or path pieces)
+        int idx = lower.indexOf('_');
+        if (idx >= 0 && idx + 1 < lower.length()) {
+            String fallback = lower.substring(idx + 1);
+            mapped = COUNTRY_NAME_INDEX.get(fallback);
+            if (mapped != null) {
+                return mapped;
+            }
+            String fallbackUpper = fallback.toUpperCase(Locale.ROOT);
+            if (ISO_COUNTRY_CODES.contains(fallbackUpper)) {
+                return fallbackUpper;
+            }
+        }
         return null;
     }
 
