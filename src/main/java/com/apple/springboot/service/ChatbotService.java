@@ -96,8 +96,7 @@ public class ChatbotService {
 
             List<ChatbotResultDto> vectorDtos = results.stream()
                     .map(r -> {
-                        var chunk = r.getContentChunk();
-                        var section = chunk.getConsolidatedEnrichedSection();
+                        var section = r.getContentChunk().getConsolidatedEnrichedSection();
                         ChatbotResultDto dto = new ChatbotResultDto();
                         dto.setSection(sectionKeyFinal);
                         dto.setSectionPath(section.getSectionPath());
@@ -107,23 +106,12 @@ public class ChatbotService {
                         dto.setContentRole(section.getOriginalFieldName());
                         dto.setLastModified(section.getSavedAt() != null ? section.getSavedAt().toString() : null);
                         dto.setMatchTerms(List.of(sectionKeyFinal));
-                        String locale = extractLocale(section);
-                        String language = extractLanguage(section, locale);
-                        String country = extractCountry(section, locale);
-                        if (locale != null) {
-                            int idx = locale.indexOf('_');
-                            if (idx > 0) {
-                                if (language == null) {
-                                    language = locale.substring(0, idx);
-                                }
-                                if (country == null) {
-                                    country = locale.substring(idx + 1);
-                                }
-                            }
-                        }
-                        dto.setLocale(locale);
-                        dto.setCountry(country);
-                        dto.setLanguage(language);
+
+                        LocaleTriple localeInfo = resolveLocaleInfo(section, localeCriteria);
+                        dto.setLocale(localeInfo.locale());
+                        dto.setLanguage(localeInfo.language());
+                        dto.setCountry(localeInfo.country());
+
                         dto.setTenant(extractTenant(section));
                         dto.setPageId(extractPageId(section));
                         return dto;
@@ -168,23 +156,12 @@ public class ChatbotService {
                         dto.setContentRole(section.getOriginalFieldName());
                         dto.setLastModified(section.getSavedAt() != null ? section.getSavedAt().toString() : null);
                         dto.setMatchTerms(List.of(sectionKeyFinal));
-                        String locale = extractLocale(section);
-                        String language = extractLanguage(section, locale);
-                        String country = extractCountry(section, locale);
-                        if (locale != null) {
-                            int idx = locale.indexOf('_');
-                            if (idx > 0) {
-                                if (language == null) {
-                                    language = locale.substring(0, idx);
-                                }
-                                if (country == null) {
-                                    country = locale.substring(idx + 1);
-                                }
-                            }
-                        }
-                        dto.setLocale(locale);
-                        dto.setCountry(country);
-                        dto.setLanguage(language);
+
+                        LocaleTriple localeInfo = resolveLocaleInfo(section, localeCriteria);
+                        dto.setLocale(localeInfo.locale());
+                        dto.setLanguage(localeInfo.language());
+                        dto.setCountry(localeInfo.country());
+
                         dto.setTenant(extractTenant(section));
                         dto.setPageId(extractPageId(section));
                         return dto;
@@ -586,6 +563,77 @@ public class ChatbotService {
         return filtered;
     }
 
+    private LocaleTriple resolveLocaleInfo(ConsolidatedEnrichedSection section, LocaleCriteria criteria) {
+        String rawLocale = extractLocale(section);
+        String locale = normalizeLocale(rawLocale);
+        if (!StringUtils.hasText(locale)) {
+            locale = rawLocale;
+        }
+
+        String language = extractLanguage(section, locale);
+        String country = extractCountry(section, locale);
+
+        if (!StringUtils.hasText(language)) {
+            String contextLanguage = getEnvelopeValue(section, "language");
+            if (StringUtils.hasText(contextLanguage)) {
+                language = contextLanguage.toLowerCase(Locale.ROOT);
+            }
+        }
+
+        if (!StringUtils.hasText(country)) {
+            String contextCountry = getEnvelopeValue(section, "country");
+            if (StringUtils.hasText(contextCountry)) {
+                String mapped = mapCountryCode(contextCountry);
+                if (mapped != null) {
+                    country = mapped;
+                }
+            }
+        }
+
+        if (!StringUtils.hasText(locale) && criteria != null && !criteria.locales.isEmpty()) {
+            String candidate = criteria.locales.iterator().next();
+            String normalized = normalizeLocale(candidate);
+            locale = normalized != null ? normalized : candidate;
+        }
+
+        if (!StringUtils.hasText(language) && criteria != null && !criteria.languages.isEmpty()) {
+            language = criteria.languages.iterator().next();
+        }
+
+        if (!StringUtils.hasText(country) && criteria != null && !criteria.countries.isEmpty()) {
+            country = criteria.countries.iterator().next();
+        }
+
+        if (StringUtils.hasText(locale)) {
+            String normalized = normalizeLocale(locale);
+            if (StringUtils.hasText(normalized)) {
+                locale = normalized;
+                int idx = locale.indexOf('_');
+                if (idx > 0) {
+                    if (!StringUtils.hasText(language)) {
+                        language = locale.substring(0, idx);
+                    }
+                    if (!StringUtils.hasText(country)) {
+                        country = locale.substring(idx + 1);
+                    }
+                }
+            }
+        }
+
+        if (StringUtils.hasText(language)) {
+            language = language.toLowerCase(Locale.ROOT);
+        }
+        if (StringUtils.hasText(country)) {
+            String normalizedCountry = mapCountryCode(country);
+            if (StringUtils.hasText(normalizedCountry)) {
+                country = normalizedCountry;
+            }
+            country = country.toUpperCase(Locale.ROOT);
+        }
+
+        return new LocaleTriple(locale, language, country);
+    }
+
     private boolean matchesLocaleCriteria(ChatbotResultDto dto, LocaleCriteria criteria) {
         if (criteria == null || criteria.isEmpty()) {
             return true;
@@ -689,6 +737,8 @@ public class ChatbotService {
         }
         return null;
     }
+
+    private record LocaleTriple(String locale, String language, String country) {}
 
     private static class LocaleCriteria {
         private final Set<String> locales = new HashSet<>();

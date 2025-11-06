@@ -104,6 +104,10 @@ public class AiPromptSearchService {
             }
             if (StringUtils.hasText(request.getOriginal_field_name())) roleHint = request.getOriginal_field_name();
         }
+        
+        // Derive country and language from locale if not explicitly provided
+        enrichContextWithLocale(context);
+        
         tags = tags.stream().filter(StringUtils::hasText).map(String::trim).distinct().collect(Collectors.toList());
         keywords = keywords.stream().filter(StringUtils::hasText).map(String::trim).distinct().collect(Collectors.toList());
 
@@ -271,10 +275,18 @@ public class AiPromptSearchService {
         dto.setContentRole(section.getOriginalFieldName());
         dto.setLastModified(section.getSavedAt() != null ? section.getSavedAt().toString() : null);
         dto.setMatchTerms(List.of("ai-search"));
-        // enrich with page_id, tenant, locale
-        dto.setLocale(extractLocale(section));
+        // enrich with page_id, tenant, locale, country, language
+        String locale = extractLocale(section);
+        dto.setLocale(locale);
         dto.setTenant(extractTenant(section));
         dto.setPageId(extractPageId(section));
+        
+        // Derive country and language from locale if not explicitly in context
+        String country = extractCountry(section, locale);
+        String language = extractLanguage(section, locale);
+        dto.setCountry(country);
+        dto.setLanguage(language);
+        
         return dto;
     }
 
@@ -419,6 +431,52 @@ public class AiPromptSearchService {
         return fromPath;
     }
 
+    private String extractLanguage(ConsolidatedEnrichedSection s, String localeFallback) {
+        // First try to get from context.envelope.language
+        if (s.getContext() != null) {
+            Object env = s.getContext().get("envelope");
+            if (env instanceof Map<?,?> m) {
+                Object lang = m.get("language");
+                if (lang instanceof String str && StringUtils.hasText(str)) {
+                    return str.toLowerCase(Locale.ROOT);
+                }
+            }
+        }
+        // Derive from locale if available
+        if (StringUtils.hasText(localeFallback)) {
+            String normalized = localeFallback.replace('-', '_').trim();
+            int idx = normalized.indexOf('_');
+            if (idx > 0) {
+                return normalized.substring(0, idx).toLowerCase(Locale.ROOT);
+            } else if (normalized.length() >= 2) {
+                return normalized.toLowerCase(Locale.ROOT);
+            }
+        }
+        return null;
+    }
+
+    private String extractCountry(ConsolidatedEnrichedSection s, String localeFallback) {
+        // First try to get from context.envelope.country
+        if (s.getContext() != null) {
+            Object env = s.getContext().get("envelope");
+            if (env instanceof Map<?,?> m) {
+                Object country = m.get("country");
+                if (country instanceof String str && StringUtils.hasText(str)) {
+                    return str.toUpperCase(Locale.ROOT);
+                }
+            }
+        }
+        // Derive from locale if available
+        if (StringUtils.hasText(localeFallback)) {
+            String normalized = localeFallback.replace('-', '_').trim();
+            int idx = normalized.indexOf('_');
+            if (idx >= 0 && idx + 1 < normalized.length()) {
+                return normalized.substring(idx + 1).toUpperCase(Locale.ROOT);
+            }
+        }
+        return null;
+    }
+
     private String extractTenant(ConsolidatedEnrichedSection s) {
         if (s.getContext() != null) {
             Object env = s.getContext().get("envelope");
@@ -458,5 +516,44 @@ public class AiPromptSearchService {
         var m = Pattern.compile("/[a-z]{2}_[A-Z]{2}/([^/]+)/").matcher(path);
         if (m.find()) return m.group(1);
         return null;
+    }
+
+    private void enrichContextWithLocale(Map<String, Object> context) {
+        if (context == null || !context.containsKey("envelope")) return;
+        
+        Object envelopeObj = context.get("envelope");
+        if (!(envelopeObj instanceof Map)) return;
+        
+        @SuppressWarnings("unchecked")
+        Map<String, Object> envelope = (Map<String, Object>) envelopeObj;
+        
+        Object localeObj = envelope.get("locale");
+        if (!(localeObj instanceof String)) return;
+        
+        String locale = ((String) localeObj).trim();
+        if (!StringUtils.hasText(locale)) return;
+        
+        // Normalize locale: handle formats like "en_US", "en-US", "en_US"
+        String normalized = locale.replace('-', '_');
+        String[] parts = normalized.split("_");
+        
+        if (parts.length >= 2) {
+            String language = parts[0].toLowerCase(Locale.ROOT);
+            String country = parts[1].toUpperCase(Locale.ROOT);
+            
+            // Only set if not already present
+            if (!envelope.containsKey("language") || envelope.get("language") == null) {
+                envelope.put("language", language);
+            }
+            if (!envelope.containsKey("country") || envelope.get("country") == null) {
+                envelope.put("country", country);
+            }
+        } else if (parts.length == 1) {
+            // Only language code provided (e.g., "en")
+            String language = parts[0].toLowerCase(Locale.ROOT);
+            if (!envelope.containsKey("language") || envelope.get("language") == null) {
+                envelope.put("language", language);
+            }
+        }
     }
 }
