@@ -43,11 +43,11 @@ public class ChatbotController {
 //    }
 
     // Optional: legacy behavior if you need it for comparison
-    @PostMapping("/query-legacy")
-    public ResponseEntity<List<ChatbotResultDto>> legacy(@RequestBody ChatbotRequest request) {
-        if (request == null || !StringUtils.hasText(request.getMessage())) {
-            return ResponseEntity.badRequest().body(Collections.emptyList());
-        }
-        return ResponseEntity.ok(chatbotService.query(request));
-    }
+//    @PostMapping("/query-legacy")
+//    public ResponseEntity<List<ChatbotResultDto>> legacy(@RequestBody ChatbotRequest request) {
+//        if (request == null || !StringUtils.hasText(request.getMessage())) {
+//            return ResponseEntity.badRequest().body(Collections.emptyList());
+//        }
+//        return ResponseEntity.ok(chatbotService.query(request));
+//    }
 }
