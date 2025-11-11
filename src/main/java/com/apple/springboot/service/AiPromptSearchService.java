@@ -625,13 +625,37 @@ public class AiPromptSearchService {
                                         List<String> path,
                                         Set<List<String>> optionalPaths) {
         if (actual == null) {
+            String derivedLocale = null;
+
             if (optionalPaths != null && optionalPaths.contains(path)) {
                 return true;
             }
             if (isLocalePath(path)) {
-                String derivedLocale = extractLocale(section);
+                derivedLocale = extractLocale(section);
                 if (StringUtils.hasText(derivedLocale)) {
                     String normalized = normalizeContextValue(derivedLocale);
+                    if (expected.contains(normalized)) {
+                        return true;
+                    }
+                }
+            } else if (isLanguagePath(path)) {
+                if (derivedLocale == null) {
+                    derivedLocale = extractLocale(section);
+                }
+                String derivedLanguage = extractLanguage(section, derivedLocale);
+                if (StringUtils.hasText(derivedLanguage)) {
+                    String normalized = normalizeContextValue(derivedLanguage);
+                    if (expected.contains(normalized)) {
+                        return true;
+                    }
+                }
+            } else if (isCountryPath(path)) {
+                if (derivedLocale == null) {
+                    derivedLocale = extractLocale(section);
+                }
+                String derivedCountry = extractCountry(section, derivedLocale);
+                if (StringUtils.hasText(derivedCountry)) {
+                    String normalized = normalizeContextValue(derivedCountry);
                     if (expected.contains(normalized)) {
                         return true;
                     }
@@ -672,6 +696,32 @@ public class AiPromptSearchService {
         }
         if (path.size() == 1) {
             return "locale".equals(path.get(0));
+        }
+        return false;
+    }
+
+    private boolean isLanguagePath(List<String> path) {
+        if (path == null || path.isEmpty()) {
+            return false;
+        }
+        if (path.size() == 2) {
+            return "envelope".equals(path.get(0)) && "language".equals(path.get(1));
+        }
+        if (path.size() == 1) {
+            return "language".equals(path.get(0));
+        }
+        return false;
+    }
+
+    private boolean isCountryPath(List<String> path) {
+        if (path == null || path.isEmpty()) {
+            return false;
+        }
+        if (path.size() == 2) {
+            return "envelope".equals(path.get(0)) && "country".equals(path.get(1));
+        }
+        if (path.size() == 1) {
+            return "country".equals(path.get(0));
         }
         return false;
     }
