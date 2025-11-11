@@ -58,17 +58,17 @@ public class AiPromptSearchService {
 
         // Extract filters
         String query = userMessage;
-        List<String> tags = new ArrayList<>();
-        List<String> keywords = new ArrayList<>();
+        List<String> aiTags = new ArrayList<>();
+        List<String> aiKeywords = new ArrayList<>();
         String roleHint = null;
-        Map<String, Object> context = new HashMap<>();
+        Map<String, Object> aiContext = new HashMap<>();
 
         if (aiJson != null) {
             if (aiJson.hasNonNull("query") && aiJson.get("query").isTextual()) {
                 query = aiJson.get("query").asText(query);
             }
-            tags.addAll(readStrings(aiJson.get("tags")));
-            keywords.addAll(readStrings(aiJson.get("keywords")));
+            aiTags.addAll(readStrings(aiJson.get("tags")));
+            aiKeywords.addAll(readStrings(aiJson.get("keywords")));
             if (aiJson.hasNonNull("original_field_name") && aiJson.get("original_field_name").isTextual()) {
                 roleHint = aiJson.get("original_field_name").asText();
             }
@@ -76,32 +76,21 @@ public class AiPromptSearchService {
                 // Convert AI context to Map, preserving structure including envelope.locale, envelope.country, envelope.language
                 @SuppressWarnings("unchecked")
                 Map<String, Object> ctx = objectMapper.convertValue(aiJson.get("context"), Map.class);
-                if (ctx != null) context.putAll(ctx);
+                if (ctx != null) aiContext.putAll(ctx);
             }
         }
+
+        boolean userProvidedTags = request != null && request.getTags() != null;
+        boolean userProvidedKeywords = request != null && request.getKeywords() != null;
+        boolean userProvidedContext = request != null && request.getContext() != null;
+
+        List<String> tags = userProvidedTags ? new ArrayList<>(request.getTags()) : new ArrayList<>(aiTags);
+        List<String> keywords = userProvidedKeywords ? new ArrayList<>(request.getKeywords()) : new ArrayList<>(aiKeywords);
+        Map<String, Object> context = userProvidedContext
+                ? deepCopyContext(request.getContext())
+                : new HashMap<>(aiContext);
+
         if (request != null) {
-            if (request.getTags() != null) tags.addAll(request.getTags());
-            if (request.getKeywords() != null) keywords.addAll(request.getKeywords());
-            if (request.getContext() != null) {
-                // Merge request context, ensuring envelope fields are preserved
-                Map<String, Object> reqCtx = request.getContext();
-                if (reqCtx.containsKey("envelope")) {
-                    @SuppressWarnings("unchecked")
-                    Map<String, Object> reqEnvelope = (Map<String, Object>) reqCtx.get("envelope");
-                    if (reqEnvelope != null) {
-                        Map<String, Object> envelopeMap = new HashMap<>();
-                        if (context.containsKey("envelope") && context.get("envelope") instanceof Map) {
-                            @SuppressWarnings("unchecked")
-                            Map<String, Object> existing = (Map<String, Object>) context.get("envelope");
-                            envelopeMap.putAll(existing);
-                        }
-                        envelopeMap.putAll(reqEnvelope);
-                        context.put("envelope", envelopeMap);
-                    }
-                } else {
-                    context.putAll(reqCtx);
-                }
-            }
             if (StringUtils.hasText(request.getOriginal_field_name())) roleHint = request.getOriginal_field_name();
         }
         
@@ -685,6 +674,15 @@ public class AiPromptSearchService {
             return "";
         }
         return raw.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private Map<String, Object> deepCopyContext(Map<String, Object> source) {
+        if (source == null || source.isEmpty()) {
+            return new HashMap<>();
+        }
+        @SuppressWarnings("unchecked")
+        Map<String, Object> copy = objectMapper.convertValue(source, Map.class);
+        return copy != null ? copy : new HashMap<>();
     }
 
     private boolean isLocalePath(List<String> path) {

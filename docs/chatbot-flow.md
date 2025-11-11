@@ -17,8 +17,8 @@ The legacy route `POST /api/chatbot/query-legacy` uses `ChatbotService` and skip
    The Bedrock response is stripped of any Markdown fences and parsed into JSON. Failures to parse are ignored so the user message still drives the search.
 4. **Filter synthesis**  
    - `query` defaults to the user message unless Bedrock refines it.  
-   - `tags` / `keywords` merge AI output with request-provided filters.  
-   - `context` merges AI-derived hints with `request.context`, preserving nested `envelope` values (locale, country, language).  
+   - `tags` / `keywords`: if the caller supplied them in `ChatbotRequest`, the service uses those values verbatim; otherwise it falls back to the AI-generated hints.  
+   - `context`: user-provided context overrides the AI context; when absent, the AI context seeds locale/country/language hints.  
    - A `sectionKey` is inferred from AI context or directly from the user message via regex (`*-section*`).  
    - `roleHint` is taken from Bedrock (`original_field_name`) or inferred heuristically. The role filter is only enforced if the user explicitly requested it.
    - The effective `limit` defaults to 1000 unless the caller provides a lower number.
