@@ -106,10 +106,12 @@ public class AiPromptSearchService {
         }
         
         // Derive country and language from locale if not explicitly provided
-        enrichContextWithLocale(context);
+        Set<List<String>> derivedLocalePaths = enrichContextWithLocale(context);
         
         tags = tags.stream().filter(StringUtils::hasText).map(String::trim).distinct().collect(Collectors.toList());
         keywords = keywords.stream().filter(StringUtils::hasText).map(String::trim).distinct().collect(Collectors.toList());
+
+        Map<List<String>, Set<String>> contextFilterIndex = buildContextFilterIndex(context);
 
         // Derive section key (from AI context or user text)
         String sectionKey = null;
@@ -177,6 +179,7 @@ public class AiPromptSearchService {
                     (sectionKey != null)
                             ? consolidatedRepo.findBySectionKey(sectionKey, Math.max(limit * 2, 50))
                             : consolidatedRepo.findByMetadataQuery(query, Math.max(limit * 2, 50));
+            metaMatches = filterByContext(metaMatches, contextFilterIndex, derivedLocalePaths);
 
             if (org.springframework.util.StringUtils.hasText(sectionKey)) {
                 // Aggregate results from multiple strategies and dedupe
@@ -210,6 +213,7 @@ public class AiPromptSearchService {
                 }
 
                 List<ConsolidatedEnrichedSection> rows = new java.util.ArrayList<>(agg.values());
+                rows = filterByContext(rows, contextFilterIndex, derivedLocalePaths);
 
                 // Apply a role only if the user explicitly requested it; ignore AI-suggested roles otherwise
                 if (userExplicitRole && org.springframework.util.StringUtils.hasText(roleHint)) {
@@ -518,42 +522,200 @@ public class AiPromptSearchService {
         return null;
     }
 
-    private void enrichContextWithLocale(Map<String, Object> context) {
-        if (context == null || !context.containsKey("envelope")) return;
-        
+    private Map<List<String>, Set<String>> buildContextFilterIndex(Map<String, Object> context) {
+        Map<List<String>, Set<String>> index = new LinkedHashMap<>();
+        if (context == null || context.isEmpty()) return index;
+        buildContextFilterIndexRecursive(context, new ArrayDeque<>(), index);
+        return index;
+    }
+
+    private void buildContextFilterIndexRecursive(Object value,
+                                                  Deque<String> path,
+                                                  Map<List<String>, Set<String>> index) {
+        if (value instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                if (entry.getKey() == null) continue;
+                path.addLast(entry.getKey().toString());
+                buildContextFilterIndexRecursive(entry.getValue(), path, index);
+                path.removeLast();
+            }
+            return;
+        }
+
+        if (path.isEmpty()) {
+            return;
+        }
+
+        if (value instanceof Collection<?> collection) {
+            Set<String> normalized = collection.stream()
+                    .filter(Objects::nonNull)
+                    .map(Object::toString)
+                    .map(this::normalizeContextValue)
+                    .filter(str -> !str.isBlank())
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+            if (!normalized.isEmpty()) {
+                index.merge(new ArrayList<>(path), normalized, (existing, add) -> {
+                    existing.addAll(add);
+                    return existing;
+                });
+            }
+        } else if (value != null) {
+            String normalized = normalizeContextValue(value.toString());
+            if (!normalized.isBlank()) {
+                index.merge(new ArrayList<>(path),
+                        new LinkedHashSet<>(List.of(normalized)),
+                        (existing, add) -> {
+                            existing.addAll(add);
+                            return existing;
+                        });
+            }
+        }
+    }
+
+    private List<ConsolidatedEnrichedSection> filterByContext(List<ConsolidatedEnrichedSection> sections,
+                                                             Map<List<String>, Set<String>> contextFilterIndex,
+                                                             Set<List<String>> optionalPaths) {
+        if (contextFilterIndex == null || contextFilterIndex.isEmpty() || sections == null || sections.isEmpty()) {
+            return sections;
+        }
+        return sections.stream()
+                .filter(section -> matchesContextFilters(section, contextFilterIndex, optionalPaths))
+                .collect(Collectors.toList());
+    }
+
+    private boolean matchesContextFilters(ConsolidatedEnrichedSection section,
+                                          Map<List<String>, Set<String>> filterIndex,
+                                          Set<List<String>> optionalPaths) {
+        if (filterIndex == null || filterIndex.isEmpty()) {
+            return true;
+        }
+        Map<String, Object> sectionContext = section.getContext();
+        if (sectionContext == null || sectionContext.isEmpty()) {
+            return false;
+        }
+        for (Map.Entry<List<String>, Set<String>> entry : filterIndex.entrySet()) {
+            if (entry.getValue().isEmpty()) {
+                continue;
+            }
+            Object actual = resolveContextValue(sectionContext, entry.getKey());
+            if (!contextValueMatches(section, actual, entry.getValue(), entry.getKey(), optionalPaths)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private Object resolveContextValue(Map<String, Object> context, List<String> path) {
+        Object current = context;
+        for (String key : path) {
+            if (!(current instanceof Map<?, ?> map)) {
+                return null;
+            }
+            current = map.get(key);
+            if (current == null) {
+                return null;
+            }
+        }
+        return current;
+    }
+
+    private boolean contextValueMatches(ConsolidatedEnrichedSection section,
+                                        Object actual,
+                                        Set<String> expected,
+                                        List<String> path,
+                                        Set<List<String>> optionalPaths) {
+        if (actual == null) {
+            if (optionalPaths != null && optionalPaths.contains(path)) {
+                return true;
+            }
+            if (isLocalePath(path)) {
+                String derivedLocale = extractLocale(section);
+                if (StringUtils.hasText(derivedLocale)) {
+                    String normalized = normalizeContextValue(derivedLocale);
+                    if (expected.contains(normalized)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+        if (actual instanceof Collection<?> collection) {
+            for (Object item : collection) {
+                if (item == null) continue;
+                String normalized = normalizeContextValue(item.toString());
+                if (expected.contains(normalized)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if (actual instanceof Map<?, ?>) {
+            return false;
+        }
+        String normalized = normalizeContextValue(actual.toString());
+        return expected.contains(normalized);
+    }
+
+    private String normalizeContextValue(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        return raw.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private boolean isLocalePath(List<String> path) {
+        if (path == null || path.isEmpty()) {
+            return false;
+        }
+        if (path.size() == 2) {
+            return "envelope".equals(path.get(0)) && "locale".equals(path.get(1));
+        }
+        if (path.size() == 1) {
+            return "locale".equals(path.get(0));
+        }
+        return false;
+    }
+
+    private Set<List<String>> enrichContextWithLocale(Map<String, Object> context) {
+        Set<List<String>> derivedPaths = new java.util.HashSet<>();
+        if (context == null || !context.containsKey("envelope")) return derivedPaths;
+
         Object envelopeObj = context.get("envelope");
-        if (!(envelopeObj instanceof Map)) return;
-        
+        if (!(envelopeObj instanceof Map)) return derivedPaths;
+
         @SuppressWarnings("unchecked")
         Map<String, Object> envelope = (Map<String, Object>) envelopeObj;
-        
+
         Object localeObj = envelope.get("locale");
-        if (!(localeObj instanceof String)) return;
-        
+        if (!(localeObj instanceof String)) return derivedPaths;
+
         String locale = ((String) localeObj).trim();
-        if (!StringUtils.hasText(locale)) return;
-        
-        // Normalize locale: handle formats like "en_US", "en-US", "en_US"
+        if (!StringUtils.hasText(locale)) return derivedPaths;
+
+        // Normalize locale: handle formats like "en_US", "en-US"
         String normalized = locale.replace('-', '_');
         String[] parts = normalized.split("_");
-        
+
         if (parts.length >= 2) {
             String language = parts[0].toLowerCase(Locale.ROOT);
             String country = parts[1].toUpperCase(Locale.ROOT);
-            
-            // Only set if not already present
+
             if (!envelope.containsKey("language") || envelope.get("language") == null) {
                 envelope.put("language", language);
+                derivedPaths.add(java.util.List.of("envelope", "language"));
             }
             if (!envelope.containsKey("country") || envelope.get("country") == null) {
                 envelope.put("country", country);
+                derivedPaths.add(java.util.List.of("envelope", "country"));
             }
         } else if (parts.length == 1) {
-            // Only language code provided (e.g., "en")
             String language = parts[0].toLowerCase(Locale.ROOT);
             if (!envelope.containsKey("language") || envelope.get("language") == null) {
                 envelope.put("language", language);
+                derivedPaths.add(java.util.List.of("envelope", "language"));
             }
         }
+
+        return derivedPaths;
     }
 }

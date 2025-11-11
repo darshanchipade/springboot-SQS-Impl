@@ -39,11 +39,12 @@ The legacy route `POST /api/chatbot/query-legacy` uses `ChatbotService` and skip
 
 #### 3.2 Metadata Search (consolidated section retrieval)
 - Section-aware branch (`sectionKey` present and results exist):
-  1. Fetch by section key (`findBySectionKey` and `findByContextSectionKey`).
-  2. Expand to related keys (`sectionKey + "-items"`, trimmed suffix variations).
-  3. Aggregate in insertion order and dedupe by UUID.
-  4. If the user explicitly asked for a role, filter to matching `original_field_name`; otherwise drop the role hint to avoid excluding data.
-  5. Produce `ChatbotResultDto` with source `"consolidated_enriched_sections"`, assign sequential `cf_id`, and annotate `match_terms` with the section key and optionally the role.
+    1. Fetch by section key (`findBySectionKey` and `findByContextSectionKey`).
+    2. Expand to related keys (`sectionKey + "-items"`, trimmed suffix variations).
+    3. Aggregate in insertion order and dedupe by UUID.
+    4. If the user explicitly asked for a role, filter to matching `original_field_name`; otherwise drop the role hint to avoid excluding data.
+    5. Filter rows by the merged context hints (locale, country, language, etc.) so locale-specific queries only surface matching sections.
+    6. Produce `ChatbotResultDto` with source `"consolidated_enriched_sections"`, assign sequential `cf_id`, and annotate `match_terms` with the section key and optionally the role.
 - Fallback branch (no section key or no metadata hits):
   - Use the vector results; if none exist, fall back to metadata search by full-text (`findByMetadataQuery`).
 
