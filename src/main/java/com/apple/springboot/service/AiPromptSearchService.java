@@ -73,7 +73,6 @@ public class AiPromptSearchService {
                 roleHint = aiJson.get("original_field_name").asText();
             }
             if (aiJson.hasNonNull("context") && aiJson.get("context").isObject()) {
-                // Convert AI context to Map, preserving structure including envelope.locale, envelope.country, envelope.language
                 @SuppressWarnings("unchecked")
                 Map<String, Object> ctx = objectMapper.convertValue(aiJson.get("context"), Map.class);
                 if (ctx != null) context.putAll(ctx);
@@ -82,36 +81,11 @@ public class AiPromptSearchService {
         if (request != null) {
             if (request.getTags() != null) tags.addAll(request.getTags());
             if (request.getKeywords() != null) keywords.addAll(request.getKeywords());
-            if (request.getContext() != null) {
-                // Merge request context, ensuring envelope fields are preserved
-                Map<String, Object> reqCtx = request.getContext();
-                if (reqCtx.containsKey("envelope")) {
-                    @SuppressWarnings("unchecked")
-                    Map<String, Object> reqEnvelope = (Map<String, Object>) reqCtx.get("envelope");
-                    if (reqEnvelope != null) {
-                        Map<String, Object> envelopeMap = new HashMap<>();
-                        if (context.containsKey("envelope") && context.get("envelope") instanceof Map) {
-                            @SuppressWarnings("unchecked")
-                            Map<String, Object> existing = (Map<String, Object>) context.get("envelope");
-                            envelopeMap.putAll(existing);
-                        }
-                        envelopeMap.putAll(reqEnvelope);
-                        context.put("envelope", envelopeMap);
-                    }
-                } else {
-                    context.putAll(reqCtx);
-                }
-            }
+            if (request.getContext() != null) context.putAll(request.getContext());
             if (StringUtils.hasText(request.getOriginal_field_name())) roleHint = request.getOriginal_field_name();
         }
-
-        // Derive country and language from locale if not explicitly provided
-        Set<List<String>> derivedLocalePaths = enrichContextWithLocale(context);
-
         tags = tags.stream().filter(StringUtils::hasText).map(String::trim).distinct().collect(Collectors.toList());
         keywords = keywords.stream().filter(StringUtils::hasText).map(String::trim).distinct().collect(Collectors.toList());
-
-        Map<List<String>, Set<String>> contextFilterIndex = buildContextFilterIndex(context);
 
         // Derive section key (from AI context or user text)
         String sectionKey = null;
@@ -136,9 +110,8 @@ public class AiPromptSearchService {
             }
         }
 
-        // Default to a large limit to support open-ended results; callers can still pass an explicit limit
         int limit = (request != null && request.getLimit() != null && request.getLimit() > 0)
-                ? request.getLimit() : 1000;
+                ? Math.min(request.getLimit(), 200) : 15;
 
         try {
             // Vector search constrained by section; no strict role in SQL
@@ -179,56 +152,23 @@ public class AiPromptSearchService {
                     (sectionKey != null)
                             ? consolidatedRepo.findBySectionKey(sectionKey, Math.max(limit * 2, 50))
                             : consolidatedRepo.findByMetadataQuery(query, Math.max(limit * 2, 50));
-            metaMatches = filterByContext(metaMatches, contextFilterIndex, derivedLocalePaths);
 
             if (org.springframework.util.StringUtils.hasText(sectionKey)) {
-                // Aggregate results from multiple strategies and dedupe
-                java.util.LinkedHashMap<java.util.UUID, ConsolidatedEnrichedSection> agg = new java.util.LinkedHashMap<>();
-
-                List<ConsolidatedEnrichedSection> broad = consolidatedRepo.findBySectionKey(
-                        sectionKey,
-                        Math.max(limit * 4, 2000));
-                if (broad != null) broad.forEach(s -> { if (s.getId() != null) agg.putIfAbsent(s.getId(), s); });
-
-                List<ConsolidatedEnrichedSection> exactCtx = consolidatedRepo.findByContextSectionKey(
-                        sectionKey,
-                        Math.max(limit * 4, 2000));
-                if (exactCtx != null) exactCtx.forEach(s -> { if (s.getId() != null) agg.putIfAbsent(s.getId(), s); });
-
-                String base = sectionKey;
-                if (base.endsWith("-section")) {
-                    base = base.substring(0, base.length() - "-section".length());
-                }
-                String[] candidates = new String[] {
-                        sectionKey,
-                        sectionKey + "-items",
-                        base,
-                        base + "-section-items"
-                };
-                for (String cand : candidates) {
-                    if (cand == null || cand.isBlank()) continue;
-                    List<ConsolidatedEnrichedSection> alt = consolidatedRepo.findBySectionKey(
-                            cand.toLowerCase(Locale.ROOT), Math.max(limit * 4, 2000));
-                    if (alt != null) alt.forEach(s -> { if (s.getId() != null) agg.putIfAbsent(s.getId(), s); });
-                }
-
-                List<ConsolidatedEnrichedSection> rows = new java.util.ArrayList<>(agg.values());
-                rows = filterByContext(rows, contextFilterIndex, derivedLocalePaths);
+                // Use consolidated only for section-scoped answers
+                List<ConsolidatedEnrichedSection> rows =
+                        consolidatedRepo.findByContextSectionKey(sectionKey,
+                                org.springframework.util.StringUtils.hasText(roleHint) ? 50 : limit);
 
                 // Apply a role only if the user explicitly requested it; ignore AI-suggested roles otherwise
-                if (userExplicitRole && org.springframework.util.StringUtils.hasText(roleHint)) {
-                    final String rf = roleHint.toLowerCase();
-                    boolean anyMatch = rows.stream().anyMatch(s -> s.getOriginalFieldName() != null && s.getOriginalFieldName().toLowerCase().contains(rf));
-                    if (anyMatch) {
-                        rows = rows.stream()
-                                .filter(s -> s.getOriginalFieldName() != null
-                                        && s.getOriginalFieldName().toLowerCase().contains(rf))
-                                .limit(limit)
-                                .toList();
-                    } else {
-                        roleHint = null; // avoid applying non-existent role like "content"
-                        rows = rows.stream().limit(limit).toList();
-                    }
+                String bestRole = userExplicitRole ? pickBestRole(roleHint, rows) : null;
+                if (userExplicitRole && org.springframework.util.StringUtils.hasText(bestRole)) {
+                    final String rf = bestRole.toLowerCase();
+                    rows = rows.stream()
+                            .filter(s -> s.getOriginalFieldName() != null
+                                    && s.getOriginalFieldName().toLowerCase().contains(rf))
+                            .limit(1)
+                            .toList();
+                    roleHint = bestRole;
                 } else {
                     // all content for the section
                     roleHint = null; // ensure match_terms does not include unintended role
@@ -263,9 +203,9 @@ public class AiPromptSearchService {
                     .collect(Collectors.toList());
             return fallback;
         } catch(Exception e){
-            return List.of();
+                return List.of();
+            }
         }
-    }
 
     // Helpers
 
@@ -279,18 +219,10 @@ public class AiPromptSearchService {
         dto.setContentRole(section.getOriginalFieldName());
         dto.setLastModified(section.getSavedAt() != null ? section.getSavedAt().toString() : null);
         dto.setMatchTerms(List.of("ai-search"));
-        // enrich with page_id, tenant, locale, country, language
-        String locale = extractLocale(section);
-        dto.setLocale(locale);
+        // enrich with page_id, tenant, locale
+        dto.setLocale(extractLocale(section));
         dto.setTenant(extractTenant(section));
         dto.setPageId(extractPageId(section));
-
-        // Derive country and language from locale if not explicitly in context
-        String country = extractCountry(section, locale);
-        String language = extractLanguage(section, locale);
-        dto.setCountry(country);
-        dto.setLanguage(language);
-
         return dto;
     }
 
@@ -391,11 +323,13 @@ public class AiPromptSearchService {
         String t = text.toLowerCase(Locale.ROOT);
         if (StringUtils.hasText(sectionKey)) {
             String sk = Pattern.quote(sectionKey.toLowerCase(Locale.ROOT));
-            // only treat explicit single-token role names as role requests to avoid phrases like "all content"
-            if (Pattern.compile("(?i)\\b(?:give\\s+me\\s+)?([a-z0-9_-]+)\\s+(?:for|of)\\s+.*" + sk + "\\b").matcher(t).find()) return true;
+            // e.g., "give me X for <sectionKey>" or "X for <sectionKey>"
+            if (Pattern.compile("(?i)\\b(?:give\\s+me\\s+)?(.+?)\\s+(?:for|of)\\s+.*" + sk + "\\b").matcher(t).find()) {
+                return true;
+            }
         }
-        // generic: also only a single token before for/of
-        return Pattern.compile("(?i)\\b(?:give\\s+me\\s+)?([a-z0-9_-]+)\\s+(?:for|of)\\b").matcher(t).find();
+        // generic role pattern without section (less strict)
+        return Pattern.compile("(?i)\\b(?:give\\s+me\\s+)?([a-z0-9_-]{3,})\\s+(?:for|of)\\b").matcher(t).find();
     }
 
     private String pickBestRole(String roleCandidate, List<ConsolidatedEnrichedSection> rows) {
@@ -433,52 +367,6 @@ public class AiPromptSearchService {
         String fromPath = extractLocaleFromPath(s.getSectionUri());
         if (fromPath == null) fromPath = extractLocaleFromPath(s.getSectionPath());
         return fromPath;
-    }
-
-    private String extractLanguage(ConsolidatedEnrichedSection s, String localeFallback) {
-        // First try to get from context.envelope.language
-        if (s.getContext() != null) {
-            Object env = s.getContext().get("envelope");
-            if (env instanceof Map<?,?> m) {
-                Object lang = m.get("language");
-                if (lang instanceof String str && StringUtils.hasText(str)) {
-                    return str.toLowerCase(Locale.ROOT);
-                }
-            }
-        }
-        // Derive from locale if available
-        if (StringUtils.hasText(localeFallback)) {
-            String normalized = localeFallback.replace('-', '_').trim();
-            int idx = normalized.indexOf('_');
-            if (idx > 0) {
-                return normalized.substring(0, idx).toLowerCase(Locale.ROOT);
-            } else if (normalized.length() >= 2) {
-                return normalized.toLowerCase(Locale.ROOT);
-            }
-        }
-        return null;
-    }
-
-    private String extractCountry(ConsolidatedEnrichedSection s, String localeFallback) {
-        // First try to get from context.envelope.country
-        if (s.getContext() != null) {
-            Object env = s.getContext().get("envelope");
-            if (env instanceof Map<?,?> m) {
-                Object country = m.get("country");
-                if (country instanceof String str && StringUtils.hasText(str)) {
-                    return str.toUpperCase(Locale.ROOT);
-                }
-            }
-        }
-        // Derive from locale if available
-        if (StringUtils.hasText(localeFallback)) {
-            String normalized = localeFallback.replace('-', '_').trim();
-            int idx = normalized.indexOf('_');
-            if (idx >= 0 && idx + 1 < normalized.length()) {
-                return normalized.substring(idx + 1).toUpperCase(Locale.ROOT);
-            }
-        }
-        return null;
     }
 
     private String extractTenant(ConsolidatedEnrichedSection s) {
@@ -520,252 +408,5 @@ public class AiPromptSearchService {
         var m = Pattern.compile("/[a-z]{2}_[A-Z]{2}/([^/]+)/").matcher(path);
         if (m.find()) return m.group(1);
         return null;
-    }
-
-    private Map<List<String>, Set<String>> buildContextFilterIndex(Map<String, Object> context) {
-        Map<List<String>, Set<String>> index = new LinkedHashMap<>();
-        if (context == null || context.isEmpty()) return index;
-        buildContextFilterIndexRecursive(context, new ArrayDeque<>(), index);
-        return index;
-    }
-
-    private void buildContextFilterIndexRecursive(Object value,
-                                                  Deque<String> path,
-                                                  Map<List<String>, Set<String>> index) {
-        if (value instanceof Map<?, ?> map) {
-            for (Map.Entry<?, ?> entry : map.entrySet()) {
-                if (entry.getKey() == null) continue;
-                path.addLast(entry.getKey().toString());
-                buildContextFilterIndexRecursive(entry.getValue(), path, index);
-                path.removeLast();
-            }
-            return;
-        }
-
-        if (path.isEmpty()) {
-            return;
-        }
-
-        if (value instanceof Collection<?> collection) {
-            Set<String> normalized = collection.stream()
-                    .filter(Objects::nonNull)
-                    .map(Object::toString)
-                    .map(this::normalizeContextValue)
-                    .filter(str -> !str.isBlank())
-                    .collect(Collectors.toCollection(LinkedHashSet::new));
-            if (!normalized.isEmpty()) {
-                index.merge(new ArrayList<>(path), normalized, (existing, add) -> {
-                    existing.addAll(add);
-                    return existing;
-                });
-            }
-        } else if (value != null) {
-            String normalized = normalizeContextValue(value.toString());
-            if (!normalized.isBlank()) {
-                index.merge(new ArrayList<>(path),
-                        new LinkedHashSet<>(List.of(normalized)),
-                        (existing, add) -> {
-                            existing.addAll(add);
-                            return existing;
-                        });
-            }
-        }
-    }
-
-    private List<ConsolidatedEnrichedSection> filterByContext(List<ConsolidatedEnrichedSection> sections,
-                                                              Map<List<String>, Set<String>> contextFilterIndex,
-                                                              Set<List<String>> optionalPaths) {
-        if (contextFilterIndex == null || contextFilterIndex.isEmpty() || sections == null || sections.isEmpty()) {
-            return sections;
-        }
-        return sections.stream()
-                .filter(section -> matchesContextFilters(section, contextFilterIndex, optionalPaths))
-                .collect(Collectors.toList());
-    }
-
-    private boolean matchesContextFilters(ConsolidatedEnrichedSection section,
-                                          Map<List<String>, Set<String>> filterIndex,
-                                          Set<List<String>> optionalPaths) {
-        if (filterIndex == null || filterIndex.isEmpty()) {
-            return true;
-        }
-        Map<String, Object> sectionContext = section.getContext();
-        for (Map.Entry<List<String>, Set<String>> entry : filterIndex.entrySet()) {
-            if (entry.getValue().isEmpty()) {
-                continue;
-            }
-            Object actual = null;
-            if (sectionContext != null && !sectionContext.isEmpty()) {
-                actual = resolveContextValue(sectionContext, entry.getKey());
-            }
-            if (!contextValueMatches(section, actual, entry.getValue(), entry.getKey(), optionalPaths)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private Object resolveContextValue(Map<String, Object> context, List<String> path) {
-        Object current = context;
-        for (String key : path) {
-            if (!(current instanceof Map<?, ?> map)) {
-                return null;
-            }
-            current = map.get(key);
-            if (current == null) {
-                return null;
-            }
-        }
-        return current;
-    }
-
-    private boolean contextValueMatches(ConsolidatedEnrichedSection section,
-                                        Object actual,
-                                        Set<String> expected,
-                                        List<String> path,
-                                        Set<List<String>> optionalPaths) {
-        if (actual == null) {
-            String derivedLocale = null;
-
-            if (optionalPaths != null && optionalPaths.contains(path)) {
-                return true;
-            }
-            if (isLocalePath(path)) {
-                derivedLocale = extractLocale(section);
-                if (StringUtils.hasText(derivedLocale)) {
-                    String normalized = normalizeContextValue(derivedLocale);
-                    if (expected.contains(normalized)) {
-                        return true;
-                    }
-                }
-            } else if (isLanguagePath(path)) {
-                if (derivedLocale == null) {
-                    derivedLocale = extractLocale(section);
-                }
-                String derivedLanguage = extractLanguage(section, derivedLocale);
-                if (StringUtils.hasText(derivedLanguage)) {
-                    String normalized = normalizeContextValue(derivedLanguage);
-                    if (expected.contains(normalized)) {
-                        return true;
-                    }
-                }
-            } else if (isCountryPath(path)) {
-                if (derivedLocale == null) {
-                    derivedLocale = extractLocale(section);
-                }
-                String derivedCountry = extractCountry(section, derivedLocale);
-                if (StringUtils.hasText(derivedCountry)) {
-                    String normalized = normalizeContextValue(derivedCountry);
-                    if (expected.contains(normalized)) {
-                        return true;
-                    }
-                }
-            }
-            return false;
-        }
-        if (actual instanceof Collection<?> collection) {
-            for (Object item : collection) {
-                if (item == null) continue;
-                String normalized = normalizeContextValue(item.toString());
-                if (expected.contains(normalized)) {
-                    return true;
-                }
-            }
-            return false;
-        }
-        if (actual instanceof Map<?, ?>) {
-            return false;
-        }
-        String normalized = normalizeContextValue(actual.toString());
-        return expected.contains(normalized);
-    }
-
-    private String normalizeContextValue(String raw) {
-        if (raw == null) {
-            return "";
-        }
-        return raw.trim().toLowerCase(Locale.ROOT);
-    }
-
-    private boolean isLocalePath(List<String> path) {
-        if (path == null || path.isEmpty()) {
-            return false;
-        }
-        if (path.size() == 2) {
-            return "envelope".equals(path.get(0)) && "locale".equals(path.get(1));
-        }
-        if (path.size() == 1) {
-            return "locale".equals(path.get(0));
-        }
-        return false;
-    }
-
-    private boolean isLanguagePath(List<String> path) {
-        if (path == null || path.isEmpty()) {
-            return false;
-        }
-        if (path.size() == 2) {
-            return "envelope".equals(path.get(0)) && "language".equals(path.get(1));
-        }
-        if (path.size() == 1) {
-            return "language".equals(path.get(0));
-        }
-        return false;
-    }
-
-    private boolean isCountryPath(List<String> path) {
-        if (path == null || path.isEmpty()) {
-            return false;
-        }
-        if (path.size() == 2) {
-            return "envelope".equals(path.get(0)) && "country".equals(path.get(1));
-        }
-        if (path.size() == 1) {
-            return "country".equals(path.get(0));
-        }
-        return false;
-    }
-
-    private Set<List<String>> enrichContextWithLocale(Map<String, Object> context) {
-        Set<List<String>> derivedPaths = new java.util.HashSet<>();
-        if (context == null || !context.containsKey("envelope")) return derivedPaths;
-
-        Object envelopeObj = context.get("envelope");
-        if (!(envelopeObj instanceof Map)) return derivedPaths;
-
-        @SuppressWarnings("unchecked")
-        Map<String, Object> envelope = (Map<String, Object>) envelopeObj;
-
-        Object localeObj = envelope.get("locale");
-        if (!(localeObj instanceof String)) return derivedPaths;
-
-        String locale = ((String) localeObj).trim();
-        if (!StringUtils.hasText(locale)) return derivedPaths;
-
-        // Normalize locale: handle formats like "en_US", "en-US"
-        String normalized = locale.replace('-', '_');
-        String[] parts = normalized.split("_");
-
-        if (parts.length >= 2) {
-            String language = parts[0].toLowerCase(Locale.ROOT);
-            String country = parts[1].toUpperCase(Locale.ROOT);
-
-            if (!envelope.containsKey("language") || envelope.get("language") == null) {
-                envelope.put("language", language);
-                derivedPaths.add(java.util.List.of("envelope", "language"));
-            }
-            if (!envelope.containsKey("country") || envelope.get("country") == null) {
-                envelope.put("country", country);
-                derivedPaths.add(java.util.List.of("envelope", "country"));
-            }
-        } else if (parts.length == 1) {
-            String language = parts[0].toLowerCase(Locale.ROOT);
-            if (!envelope.containsKey("language") || envelope.get("language") == null) {
-                envelope.put("language", language);
-                derivedPaths.add(java.util.List.of("envelope", "language"));
-            }
-        }
-
-        return derivedPaths;
     }
 }

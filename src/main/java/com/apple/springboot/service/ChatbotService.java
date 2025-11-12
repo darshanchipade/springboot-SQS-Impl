@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -64,16 +65,27 @@ public class ChatbotService {
                 ? Math.min(request.getLimit(), 200)
                 : 15;
 
-        boolean hasRoleQuery = request != null && StringUtils.hasText(request.getOriginal_field_name());
-        int vectorPreLimit = hasRoleQuery ? Math.min(limit * 3, 100) : limit;
+        String message = request != null ? request.getMessage() : null;
+
+        LocaleCriteria localeCriteria = extractLocaleCriteria(message);
+        if (request != null && request.getContext() != null) {
+            enrichCriteriaFromContext(localeCriteria, request.getContext());
+        }
+
+        boolean explicitRole = request != null && StringUtils.hasText(request.getOriginal_field_name());
+        String roleHint = explicitRole ? request.getOriginal_field_name().trim().toLowerCase(Locale.ROOT) : null;
+        boolean inferredRole = false;
+        if (!explicitRole && userExplicitlyRequestedRole(message, key)) {
+            String inferred = inferRoleHint(message, key);
+            if (StringUtils.hasText(inferred)) {
+                roleHint = inferred.trim().toLowerCase(Locale.ROOT);
+                inferredRole = true;
+            }
+        }
+        int vectorPreLimit = StringUtils.hasText(roleHint) ? Math.min(limit * 3, 100) : limit;
 
         try {
-            String message = request != null ? request.getMessage() : null;
             String embeddingQuery = StringUtils.hasText(message) ? message : key;
-            LocaleCriteria localeCriteria = extractLocaleCriteria(message);
-            if (request != null && request.getContext() != null) {
-                enrichCriteriaFromContext(localeCriteria, request.getContext());
-            }
 
             Map<String, Object> localeContext = buildLocaleContext(localeCriteria);
             Map<String, Object> effectiveContext = mergeContextFilters(
@@ -120,28 +132,55 @@ public class ChatbotService {
 
             vectorDtos = applyCriteriaFilter(vectorDtos, localeCriteria);
 
-            // Post-filter vector by partial role (case-insensitive) when provided
-            if (hasRoleQuery) {
-                String roleFilter = request.getOriginal_field_name().toLowerCase();
+            // Consolidated search: prioritise explicit section-key matches, fallback to metadata query
+            List<ConsolidatedEnrichedSection> consolidatedMatches = new ArrayList<>();
+            if (StringUtils.hasText(sectionKeyFinal)) {
+                LinkedHashMap<UUID, ConsolidatedEnrichedSection> agg = new LinkedHashMap<>();
+                addSectionRows(agg, consolidatedRepo.findBySectionKey(
+                        sectionKeyFinal,
+                        Math.max(limit * 4, 2000)));
+                addSectionRows(agg, consolidatedRepo.findByContextSectionKey(
+                        sectionKeyFinal,
+                        Math.max(limit * 4, 2000)));
+
+                for (String variant : buildSectionKeyVariants(sectionKeyFinal)) {
+                    addSectionRows(agg, consolidatedRepo.findBySectionKey(
+                            variant,
+                            Math.max(limit * 4, 2000)));
+                }
+
+                if (!agg.isEmpty()) {
+                    consolidatedMatches = new ArrayList<>(agg.values());
+                }
+            }
+
+            if (consolidatedMatches.isEmpty()) {
+                if (StringUtils.hasText(message)) {
+                    consolidatedMatches = consolidatedRepo.findByMetadataQuery(message, Math.max(limit * 2, 50));
+                } else if (StringUtils.hasText(sectionKeyFinal)) {
+                    consolidatedMatches = consolidatedRepo.findBySectionKey(sectionKeyFinal, Math.max(limit * 2, 50));
+                }
+            }
+
+            boolean applyRoleFilter = false;
+            if (explicitRole && StringUtils.hasText(roleHint)) {
+                applyRoleFilter = true;
+            } else if (inferredRole && StringUtils.hasText(roleHint)) {
+                if (roleExists(roleHint, vectorDtos, consolidatedMatches)) {
+                    applyRoleFilter = true;
+                } else {
+                    roleHint = null;
+                }
+            }
+
+            if (applyRoleFilter && StringUtils.hasText(roleHint)) {
+                final String roleFilter = roleHint.toLowerCase(Locale.ROOT);
                 vectorDtos = vectorDtos.stream()
-                        .filter(d -> d.getContentRole() != null && d.getContentRole().toLowerCase().contains(roleFilter))
+                        .filter(d -> d.getContentRole() != null && d.getContentRole().toLowerCase(Locale.ROOT).contains(roleFilter))
                         .collect(Collectors.toList());
-            }
-
-            // Consolidated: search metadata (incl. context usagePath) using full message if available; otherwise section key
-            List<ConsolidatedEnrichedSection> consolidatedMatches;
-            if (StringUtils.hasText(message)) {
-                consolidatedMatches = consolidatedRepo.findByMetadataQuery(message, Math.max(limit * 2, 50));
-            } else {
-                consolidatedMatches = consolidatedRepo.findBySectionKey(sectionKeyFinal, Math.max(limit * 2, 50));
-            }
-
-            // Partial role filtering (contains, case-insensitive) for consolidated
-            if (hasRoleQuery) {
-                final String roleFilter = request.getOriginal_field_name().toLowerCase();
                 consolidatedMatches = consolidatedMatches.stream()
                         .filter(s -> s.getOriginalFieldName() != null
-                                && s.getOriginalFieldName().toLowerCase().contains(roleFilter))
+                                && s.getOriginalFieldName().toLowerCase(Locale.ROOT).contains(roleFilter))
                         .collect(Collectors.toList());
             }
 
@@ -183,64 +222,54 @@ public class ChatbotService {
                 merged.putIfAbsent(dedupKey, d);
             }
 
-            List<ChatbotResultDto> mergedList = new ArrayList<>(merged.values());
+            List<ChatbotResultDto> mergedList = finalizeResults(new ArrayList<>(merged.values()),
+                    localeCriteria, request, sectionKeyFinal, roleHint, applyRoleFilter, limit);
 
-            // Trim to limit after filtering
-            if (mergedList.size() > limit) {
-                mergedList = mergedList.subList(0, limit);
-            }
-
-            String inferredLocale = localeCriteria.locales.isEmpty() ? null : localeCriteria.locales.iterator().next();
-            String inferredCountry = localeCriteria.countries.isEmpty() ? null : localeCriteria.countries.iterator().next();
-            String inferredLanguage = localeCriteria.languages.isEmpty() ? null : localeCriteria.languages.iterator().next();
-
-            // Assign cf ids; enrich match_terms with tags/keywords and role if provided
-            for (int i = 0; i < mergedList.size(); i++) {
-                ChatbotResultDto item = mergedList.get(i);
-                item.setCfId("cf" + (i + 1));
-
-                var terms = new java.util.LinkedHashSet<String>();
-                terms.add(sectionKeyFinal);
-                if (hasRoleQuery) {
-                    terms.add(request.getOriginal_field_name());
+            if (mergedList.isEmpty() && StringUtils.hasText(sectionKeyFinal)) {
+                LinkedHashMap<UUID, ConsolidatedEnrichedSection> fallbackAgg = new LinkedHashMap<>();
+                addSectionRows(fallbackAgg, consolidatedRepo.findBySectionKey(
+                        sectionKeyFinal,
+                        Math.max(limit * 4, 2000)));
+                addSectionRows(fallbackAgg, consolidatedRepo.findByContextSectionKey(
+                        sectionKeyFinal,
+                        Math.max(limit * 4, 2000)));
+                List<ConsolidatedEnrichedSection> fallbackRows = new ArrayList<>(fallbackAgg.values());
+                if (fallbackRows.isEmpty()) {
+                    fallbackRows = consolidatedRepo.findByMetadataQuery(sectionKeyFinal, Math.max(limit * 2, 50));
                 }
-                if (request != null && request.getTags() != null) {
-                    terms.addAll(request.getTags());
-                }
-                if (request != null && request.getKeywords() != null) {
-                    terms.addAll(request.getKeywords());
-                }
-                if (!localeCriteria.pageIds.isEmpty()) {
-                    terms.addAll(localeCriteria.pageIds);
-                }
-                item.setMatchTerms(new ArrayList<>(terms));
-
-                if (!StringUtils.hasText(item.getLocale()) && StringUtils.hasText(inferredLocale)) {
-                    item.setLocale(inferredLocale);
-                }
-                if (!StringUtils.hasText(item.getCountry()) && StringUtils.hasText(inferredCountry)) {
-                    item.setCountry(inferredCountry);
-                }
-                if (!StringUtils.hasText(item.getLanguage()) && StringUtils.hasText(inferredLanguage)) {
-                    item.setLanguage(inferredLanguage);
+                if (applyRoleFilter && StringUtils.hasText(roleHint)) {
+                    final String roleFilter = roleHint.toLowerCase(Locale.ROOT);
+                    fallbackRows = fallbackRows.stream()
+                            .filter(s -> s.getOriginalFieldName() != null
+                                    && s.getOriginalFieldName().toLowerCase(Locale.ROOT).contains(roleFilter))
+                            .collect(Collectors.toList());
                 }
 
-                if (StringUtils.hasText(item.getLocale())) {
-                    String normalized = normalizeLocale(item.getLocale());
-                    if (StringUtils.hasText(normalized)) {
-                        int idx = normalized.indexOf('_');
-                        if (idx > 0) {
-                            String langPart = normalized.substring(0, idx);
-                            String countryPart = normalized.substring(idx + 1);
-                            if (!StringUtils.hasText(item.getLanguage())) {
-                                item.setLanguage(langPart);
-                            }
-                            if (!StringUtils.hasText(item.getCountry())) {
-                                item.setCountry(countryPart);
-                            }
-                        }
-                    }
-                }
+                List<ChatbotResultDto> fallbackDtos = fallbackRows.stream()
+                        .map(section -> {
+                            ChatbotResultDto dto = new ChatbotResultDto();
+                            dto.setSection(sectionKeyFinal);
+                            dto.setSectionPath(section.getSectionPath());
+                            dto.setSectionUri(section.getSectionUri());
+                            dto.setCleansedText(section.getCleansedText());
+                            dto.setSource("consolidated_enriched_sections");
+                            dto.setContentRole(section.getOriginalFieldName());
+                            dto.setLastModified(section.getSavedAt() != null ? section.getSavedAt().toString() : null);
+                            dto.setMatchTerms(List.of(sectionKeyFinal));
+
+                            LocaleTriple localeInfo = resolveLocaleInfo(section, localeCriteria);
+                            dto.setLocale(localeInfo.locale());
+                            dto.setLanguage(localeInfo.language());
+                            dto.setCountry(localeInfo.country());
+
+                            dto.setTenant(extractTenant(section));
+                            dto.setPageId(extractPageId(section));
+                            return dto;
+                        })
+                        .collect(Collectors.toList());
+
+                fallbackDtos = applyCriteriaFilter(fallbackDtos, localeCriteria);
+                mergedList = finalizeResults(fallbackDtos, localeCriteria, request, sectionKeyFinal, roleHint, applyRoleFilter, limit);
             }
 
             return mergedList;
@@ -257,18 +286,106 @@ public class ChatbotService {
         if (m.find()) {
             return normalizeKey(m.group(0));
         }
-        for (String token : message.split("\\s+")) {
-            long hyphens = token.chars().filter(ch -> ch == '-').count();
-            if (hyphens >= 2) {
+
+        String[] tokens = message.split("\\s+");
+
+        for (String raw : tokens) {
+            String token = sanitizeToken(raw);
+            if (!StringUtils.hasText(token)) {
+                continue;
+            }
+            long hyphenCount = token.chars().filter(ch -> ch == '-').count();
+            if (hyphenCount >= 2) {
                 return normalizeKey(token);
             }
         }
+
+        for (String raw : tokens) {
+            String candidate = maybeSectionKeyFromToken(raw);
+            if (StringUtils.hasText(candidate)) {
+                return normalizeKey(candidate);
+            }
+        }
+
         return null;
+    }
+
+    private String sanitizeToken(String token) {
+        if (!StringUtils.hasText(token)) {
+            return null;
+        }
+        String cleaned = token.trim()
+                .replaceAll("^[^A-Za-z0-9_-]+", "")
+                .replaceAll("[^A-Za-z0-9_-]+$", "")
+                .toLowerCase(Locale.ROOT);
+        return StringUtils.hasText(cleaned) ? cleaned : null;
+    }
+
+    private String maybeSectionKeyFromToken(String raw) {
+        String token = sanitizeToken(raw);
+        if (!StringUtils.hasText(token)) {
+            return null;
+        }
+        if (!token.contains("-")) {
+            return null;
+        }
+        if (LOCALE_PATTERN.matcher(token).matches()) {
+            return null;
+        }
+        if (!token.endsWith("-section")) {
+            token = token + "-section";
+        }
+        return token;
     }
 
     private String normalizeKey(String key) {
         if (!StringUtils.hasText(key)) return null;
         return key.trim().toLowerCase();
+    }
+
+    private String inferRoleHint(String text, String sectionKey) {
+        if (!StringUtils.hasText(text)) return null;
+        String t = text.toLowerCase(Locale.ROOT).trim();
+
+        String roleCandidate = null;
+        if (StringUtils.hasText(sectionKey)) {
+            String sk = Pattern.quote(sectionKey.toLowerCase(Locale.ROOT));
+            Matcher mFor = Pattern.compile("(?i)\\bgive\\s+me\\s+(.+?)\\s+(?:for|of)\\s+.*" + sk + "\\b").matcher(t);
+            if (mFor.find()) roleCandidate = mFor.group(1);
+            if (roleCandidate == null) {
+                Matcher mGeneric = Pattern.compile("(?i)\\b(.+?)\\s+(?:for|of)\\s+.*" + sk + "\\b").matcher(t);
+                if (mGeneric.find()) roleCandidate = mGeneric.group(1);
+            }
+        }
+        if (roleCandidate == null) {
+            Matcher mFor = Pattern.compile("(?i)\\bgive\\s+me\\s+(.+?)\\s+(?:for|of)\\s+").matcher(t);
+            if (mFor.find()) roleCandidate = mFor.group(1);
+            if (roleCandidate == null) {
+                Matcher mGeneric = Pattern.compile("(?i)\\b([a-z0-9_-]{3,})\\b\\s+(?:for|of)\\b").matcher(t);
+                if (mGeneric.find()) roleCandidate = mGeneric.group(1);
+            }
+        }
+
+        if (!StringUtils.hasText(roleCandidate)) return null;
+
+        List<String> tokens = Arrays.stream(roleCandidate.split("\\s+"))
+                .map(s -> s.replaceAll("[^a-z0-9_-]", ""))
+                .filter(StringUtils::hasText)
+                .collect(Collectors.toList());
+        if (tokens.isEmpty()) return null;
+
+        return tokens.get(tokens.size() - 1);
+    }
+
+    private boolean userExplicitlyRequestedRole(String text, String sectionKey) {
+        if (!StringUtils.hasText(text)) return false;
+        String t = text.toLowerCase(Locale.ROOT);
+        if (StringUtils.hasText(sectionKey)) {
+            String sk = Pattern.quote(sectionKey.toLowerCase(Locale.ROOT));
+            if (Pattern.compile("(?i)\\b(?:give\\s+me\\s+)?([a-z0-9_-]+)\\s+(?:for|of)\\s+.*" + sk + "\\b")
+                    .matcher(t).find()) return true;
+        }
+        return Pattern.compile("(?i)\\b(?:give\\s+me\\s+)?([a-z0-9_-]+)\\s+(?:for|of)\\b").matcher(t).find();
     }
 
     private String extractLocale(ConsolidatedEnrichedSection s) {
@@ -848,6 +965,206 @@ public class ChatbotService {
         combined.add(existing.toString());
         combined.add(addition.toString());
         return new ArrayList<>(combined);
+    }
+
+    private void addSectionRows(LinkedHashMap<UUID, ConsolidatedEnrichedSection> agg,
+                                List<ConsolidatedEnrichedSection> rows) {
+        if (agg == null || rows == null) {
+            return;
+        }
+        for (ConsolidatedEnrichedSection row : rows) {
+            if (row != null && row.getId() != null) {
+                agg.putIfAbsent(row.getId(), row);
+            }
+        }
+    }
+
+    private boolean roleExists(String roleHint,
+                               List<ChatbotResultDto> vectorDtos,
+                               List<ConsolidatedEnrichedSection> consolidatedMatches) {
+        if (!StringUtils.hasText(roleHint)) {
+            return false;
+        }
+        String needle = roleHint.toLowerCase(Locale.ROOT);
+        if (vectorDtos != null) {
+            for (ChatbotResultDto dto : vectorDtos) {
+                if (dto.getContentRole() != null
+                        && dto.getContentRole().toLowerCase(Locale.ROOT).contains(needle)) {
+                    return true;
+                }
+            }
+        }
+        if (consolidatedMatches != null) {
+            for (ConsolidatedEnrichedSection section : consolidatedMatches) {
+                if (section != null && section.getOriginalFieldName() != null
+                        && section.getOriginalFieldName().toLowerCase(Locale.ROOT).contains(needle)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private List<ChatbotResultDto> finalizeResults(List<ChatbotResultDto> items,
+                                                   LocaleCriteria localeCriteria,
+                                                   ChatbotRequest request,
+                                                   String sectionKey,
+                                                   String roleHint,
+                                                   boolean applyRoleFilter,
+                                                   int limit) {
+        if (items == null || items.isEmpty()) {
+            return List.of();
+        }
+
+        List<ChatbotResultDto> trimmed = items.size() > limit ? new ArrayList<>(items.subList(0, limit))
+                : new ArrayList<>(items);
+
+        String inferredLocale = localeCriteria.locales.isEmpty() ? null : localeCriteria.locales.iterator().next();
+        String inferredCountry = localeCriteria.countries.isEmpty() ? null : localeCriteria.countries.iterator().next();
+        String inferredLanguage = localeCriteria.languages.isEmpty() ? null : localeCriteria.languages.iterator().next();
+
+        for (int i = 0; i < trimmed.size(); i++) {
+            ChatbotResultDto item = trimmed.get(i);
+            item.setCfId("cf" + (i + 1));
+
+            var terms = new LinkedHashSet<String>();
+            if (StringUtils.hasText(sectionKey)) {
+                terms.add(sectionKey);
+            }
+            if (applyRoleFilter && StringUtils.hasText(roleHint)) {
+                terms.add(roleHint);
+            }
+            if (request != null && request.getTags() != null) {
+                terms.addAll(request.getTags());
+            }
+            if (request != null && request.getKeywords() != null) {
+                terms.addAll(request.getKeywords());
+            }
+            if (!localeCriteria.pageIds.isEmpty()) {
+                terms.addAll(localeCriteria.pageIds);
+            }
+            item.setMatchTerms(new ArrayList<>(terms));
+
+            if (!StringUtils.hasText(item.getLocale()) && StringUtils.hasText(inferredLocale)) {
+                item.setLocale(inferredLocale);
+            }
+            if (!StringUtils.hasText(item.getCountry()) && StringUtils.hasText(inferredCountry)) {
+                item.setCountry(inferredCountry);
+            }
+            if (!StringUtils.hasText(item.getLanguage()) && StringUtils.hasText(inferredLanguage)) {
+                item.setLanguage(inferredLanguage);
+            }
+
+            if (StringUtils.hasText(item.getLocale())) {
+                String normalized = normalizeLocale(item.getLocale());
+                if (StringUtils.hasText(normalized)) {
+                    int idx = normalized.indexOf('_');
+                    if (idx > 0) {
+                        String langPart = normalized.substring(0, idx);
+                        String countryPart = normalized.substring(idx + 1);
+                        if (!StringUtils.hasText(item.getLanguage())) {
+                            item.setLanguage(langPart);
+                        }
+                        if (!StringUtils.hasText(item.getCountry())) {
+                            item.setCountry(countryPart);
+                        }
+                    }
+                }
+            }
+        }
+
+        return trimmed;
+    }
+
+    private List<String> buildSectionKeyVariants(String sectionKey) {
+        if (!StringUtils.hasText(sectionKey)) {
+            return List.of();
+        }
+        String normalized = sectionKey.toLowerCase(Locale.ROOT).trim();
+        LinkedHashSet<String> variants = new LinkedHashSet<>();
+        variants.add(normalized);
+
+        String root = stripKnownSuffixes(normalized);
+        addVariantsFromRoot(variants, root);
+
+        String singularRoot = singularizeKeySegment(root);
+        if (StringUtils.hasText(singularRoot) && !singularRoot.equals(root)) {
+            addVariantsFromRoot(variants, singularRoot);
+        }
+
+        String normalizedSingular = singularizeKeySegment(normalized);
+        if (StringUtils.hasText(normalizedSingular)) {
+            variants.add(normalizedSingular);
+        }
+
+        return new ArrayList<>(variants);
+    }
+
+    private void addVariantsFromRoot(Set<String> variants, String root) {
+        if (!StringUtils.hasText(root)) {
+            return;
+        }
+        String base = root.toLowerCase(Locale.ROOT).trim();
+        variants.add(base);
+        variants.add(base + "-section");
+        variants.add(base + "-items");
+        variants.add(base + "-items-horizontal");
+        variants.add(base + "-items-vertical");
+        variants.add(base + "-items-wide");
+        variants.add(base + "-items-desktop");
+        variants.add(base + "-items-mobile");
+    }
+
+    private String stripKnownSuffixes(String key) {
+        if (!StringUtils.hasText(key)) {
+            return key;
+        }
+        String result = key.toLowerCase(Locale.ROOT).trim();
+        String[] suffixes = {
+                "-items-horizontal",
+                "-items-vertical",
+                "-items-wide",
+                "-items-desktop",
+                "-items-mobile",
+                "-items",
+                "-section"
+        };
+        boolean stripped;
+        do {
+            stripped = false;
+            for (String suffix : suffixes) {
+                if (result.endsWith(suffix)) {
+                    result = result.substring(0, result.length() - suffix.length());
+                    stripped = true;
+                    break;
+                }
+            }
+        } while (stripped && StringUtils.hasText(result));
+        return result;
+    }
+
+    private String singularizeKeySegment(String key) {
+        if (!StringUtils.hasText(key)) {
+            return key;
+        }
+        String value = key.toLowerCase(Locale.ROOT).trim();
+        int idx = value.lastIndexOf('-');
+        String prefix = idx >= 0 ? value.substring(0, idx + 1) : "";
+        String segment = idx >= 0 ? value.substring(idx + 1) : value;
+        if (segment.length() <= 3) {
+            return key;
+        }
+        if (segment.endsWith("ies") && segment.length() > 3) {
+            segment = segment.substring(0, segment.length() - 3) + "y";
+        } else if (segment.endsWith("ses") && segment.length() > 3) {
+            segment = segment.substring(0, segment.length() - 2);
+        } else if (segment.endsWith("s") && segment.length() > 3 && !segment.endsWith("ss")) {
+            segment = segment.substring(0, segment.length() - 1);
+        } else {
+            return key;
+        }
+        String singular = prefix + segment;
+        return StringUtils.hasText(singular) ? singular : key;
     }
 
     private static Map<String, String> buildCountryNameIndex() {
