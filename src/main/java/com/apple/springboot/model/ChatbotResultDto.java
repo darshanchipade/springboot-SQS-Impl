@@ -1,6 +1,7 @@
 package com.apple.springboot.model;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -10,20 +11,26 @@ import java.util.List;
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
+@Schema(description = "Chatbot search result containing matched content and metadata")
 public class ChatbotResultDto {
     @JsonProperty("section")
+    @Schema(description = "Section identifier", example = "video-section-header")
     private String section; // e.g., "video-section-header"
 
     @JsonProperty("cf_id")
+    @Schema(description = "Content fragment ID", example = "cf1")
     private String cfId; // e.g., "cf1", assigned sequentially
 
     @JsonProperty("section_path")
+    @Schema(description = "Path to the section", example = "/en_US/ipad")
     private String sectionPath;
 
     @JsonProperty("section_uri")
+    @Schema(description = "URI of the section", example = "https://example.com/section")
     private String sectionUri;
 
     @JsonProperty("cleansed_text")
+    @Schema(description = "Cleansed text content of the matched section", example = "Learn how to set up your iPad")
     private String cleansedText;
 
     @JsonProperty("page_id")

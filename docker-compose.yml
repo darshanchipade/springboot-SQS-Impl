@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  yugabytedb:
+    image: yugabytedb/yugabyte:latest
+    container_name: springboot-yugabytedb
+    environment:
+      POSTGRES_DB: bedrock_enriched_content_db
+      POSTGRES_USER: yugabyte
+      POSTGRES_PASSWORD: yugabyte
+    ports:
+      - "5433:5433"  # YugabyteDB YSQL port
+      - "7000:7000"  # YugabyteDB master/tserver UI
+    volumes:
+      - yugabyte_data:/var/lib/yugabyte
+    command: [
+      "bin/yugabyted",
+      "start",
+      "--daemon=false"
+    ]
+    healthcheck:
+      test: ["CMD-SHELL", "ysqlsh -h localhost -p 5433 -U yugabyte -d bedrock_enriched_content_db -c 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  yugabyte_data:
+

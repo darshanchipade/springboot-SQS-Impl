@@ -4,6 +4,13 @@
     import com.apple.springboot.repository.CleansedDataStoreRepository;
     import com.apple.springboot.service.DataIngestionService;
     import com.apple.springboot.service.EnrichmentPipelineService;
+    import io.swagger.v3.oas.annotations.Operation;
+    import io.swagger.v3.oas.annotations.Parameter;
+    import io.swagger.v3.oas.annotations.media.Content;
+    import io.swagger.v3.oas.annotations.media.Schema;
+    import io.swagger.v3.oas.annotations.responses.ApiResponse;
+    import io.swagger.v3.oas.annotations.responses.ApiResponses;
+    import io.swagger.v3.oas.annotations.tags.Tag;
     import org.slf4j.Logger;
     import org.slf4j.LoggerFactory;
     import org.springframework.beans.factory.annotation.Autowired;
@@ -19,6 +26,7 @@
 
     @RestController
     @RequestMapping("/api")
+    @Tag(name = "Data Extraction", description = "Data extraction, cleansing, enrichment, and storage API endpoints")
     public class DataExtractionController {
 
         private static final Logger logger = LoggerFactory.getLogger(DataExtractionController.class);
@@ -49,8 +57,24 @@
             this.cleansedDataStoreRepository = cleansedDataStoreRepository;
         }
 
+        @Operation(
+                summary = "Extract, cleanse, enrich and store data",
+                description = "Extracts data from a source URI (S3 or classpath), cleanses it, and triggers enrichment. " +
+                        "If sourceUri is not provided, uses the default configured path. " +
+                        "Enrichment is processed asynchronously in the background."
+        )
+        @ApiResponses(value = {
+                @ApiResponse(responseCode = "202", description = "Request accepted - enrichment processing initiated in background"),
+                @ApiResponse(responseCode = "200", description = "Source processed successfully but no content extracted for enrichment"),
+                @ApiResponse(responseCode = "400", description = "Bad request - file I/O error or invalid argument"),
+                @ApiResponse(responseCode = "404", description = "Source file not found"),
+                @ApiResponse(responseCode = "422", description = "Unprocessable entity - ingestion/cleansing failed"),
+                @ApiResponse(responseCode = "417", description = "Expectation failed - cannot proceed to enrichment"),
+                @ApiResponse(responseCode = "500", description = "Internal server error")
+        })
         @GetMapping("/extract-cleanse-enrich-and-store")
         public ResponseEntity<String> extractCleanseEnrichAndStore(
+                @Parameter(description = "Source URI (S3 URI or classpath path). If not provided, uses default configured path.", required = false)
                 @RequestParam(name = "sourceUri", required = false) String sourceUriParam) {
 
             String identifierForServiceCall;
@@ -129,8 +153,23 @@
     //        }
     //    }
 
+        @Operation(
+                summary = "Ingest JSON payload",
+                description = "Ingests and processes a JSON payload directly. " +
+                        "The payload is cleansed and enrichment is triggered asynchronously in the background."
+        )
+        @ApiResponses(value = {
+                @ApiResponse(responseCode = "202", description = "Request accepted - enrichment processing initiated in background"),
+                @ApiResponse(responseCode = "200", description = "Source processed successfully but no content extracted for enrichment"),
+                @ApiResponse(responseCode = "400", description = "Bad request - JSON payload is empty or invalid"),
+                @ApiResponse(responseCode = "422", description = "Unprocessable entity - ingestion/cleansing failed"),
+                @ApiResponse(responseCode = "417", description = "Expectation failed - cannot proceed to enrichment"),
+                @ApiResponse(responseCode = "500", description = "Internal server error")
+        })
         @PostMapping("/ingest-json-payload")
-        public ResponseEntity<String> ingestJsonPayload(@RequestBody String jsonPayload) {
+        public ResponseEntity<String> ingestJsonPayload(
+                @Parameter(description = "JSON payload to ingest and process", required = true)
+                @RequestBody String jsonPayload) {
             String sourceIdentifier = "api-payload-" + UUID.randomUUID().toString();
             logger.info("Received POST request to process JSON payload. Assigned sourceIdentifier: {}", sourceIdentifier);
             CleansedDataStore cleansedDataEntry = null;
@@ -153,8 +192,20 @@
                 return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Error processing JSON payload "+ sourceIdentifier + ": " + e.getMessage());
             }
         }
+        @Operation(
+                summary = "Get cleansed data status",
+                description = "Retrieves the status of a cleansed data entry by its ID. " +
+                        "Returns the status string or 'NOT_FOUND' if the ID doesn't exist."
+        )
+        @ApiResponses(value = {
+                @ApiResponse(responseCode = "200", description = "Status retrieved successfully",
+                        content = @Content(mediaType = "text/plain", schema = @Schema(type = "string"))),
+                @ApiResponse(responseCode = "200", description = "Status not found", content = @Content)
+        })
         @GetMapping("/cleansed-data-status/{id}")
-        public String getStatus(@PathVariable UUID id) {
+        public String getStatus(
+                @Parameter(description = "UUID of the cleansed data entry", required = true)
+                @PathVariable UUID id) {
             return cleansedDataStoreRepository.findById(id)
                     .map(CleansedDataStore::getStatus)
                     .orElse("NOT_FOUND");
