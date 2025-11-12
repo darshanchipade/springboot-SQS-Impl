@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -128,12 +129,44 @@ public class ChatbotService {
                         .collect(Collectors.toList());
             }
 
-            // Consolidated: search metadata (incl. context usagePath) using full message if available; otherwise section key
-            List<ConsolidatedEnrichedSection> consolidatedMatches;
-            if (StringUtils.hasText(message)) {
-                consolidatedMatches = consolidatedRepo.findByMetadataQuery(message, Math.max(limit * 2, 50));
-            } else {
-                consolidatedMatches = consolidatedRepo.findBySectionKey(sectionKeyFinal, Math.max(limit * 2, 50));
+            // Consolidated search: prioritise explicit section-key matches, fallback to metadata query
+            List<ConsolidatedEnrichedSection> consolidatedMatches = new ArrayList<>();
+            if (StringUtils.hasText(sectionKeyFinal)) {
+                LinkedHashMap<UUID, ConsolidatedEnrichedSection> agg = new LinkedHashMap<>();
+                addSectionRows(agg, consolidatedRepo.findBySectionKey(
+                        sectionKeyFinal,
+                        Math.max(limit * 4, 2000)));
+                addSectionRows(agg, consolidatedRepo.findByContextSectionKey(
+                        sectionKeyFinal,
+                        Math.max(limit * 4, 2000)));
+
+                String base = sectionKeyFinal;
+                if (base.endsWith("-section")) {
+                    base = base.substring(0, base.length() - "-section".length());
+                }
+                String[] candidates = new String[]{
+                        sectionKeyFinal + "-items",
+                        base,
+                        base + "-section-items"
+                };
+                for (String candidate : candidates) {
+                    if (!StringUtils.hasText(candidate)) continue;
+                    addSectionRows(agg, consolidatedRepo.findBySectionKey(
+                            candidate.toLowerCase(Locale.ROOT),
+                            Math.max(limit * 4, 2000)));
+                }
+
+                if (!agg.isEmpty()) {
+                    consolidatedMatches = new ArrayList<>(agg.values());
+                }
+            }
+
+            if (consolidatedMatches.isEmpty()) {
+                if (StringUtils.hasText(message)) {
+                    consolidatedMatches = consolidatedRepo.findByMetadataQuery(message, Math.max(limit * 2, 50));
+                } else if (StringUtils.hasText(sectionKeyFinal)) {
+                    consolidatedMatches = consolidatedRepo.findBySectionKey(sectionKeyFinal, Math.max(limit * 2, 50));
+                }
             }
 
             // Partial role filtering (contains, case-insensitive) for consolidated
@@ -848,6 +881,18 @@ public class ChatbotService {
         combined.add(existing.toString());
         combined.add(addition.toString());
         return new ArrayList<>(combined);
+    }
+
+    private void addSectionRows(LinkedHashMap<UUID, ConsolidatedEnrichedSection> agg,
+                                List<ConsolidatedEnrichedSection> rows) {
+        if (agg == null || rows == null) {
+            return;
+        }
+        for (ConsolidatedEnrichedSection row : rows) {
+            if (row != null && row.getId() != null) {
+                agg.putIfAbsent(row.getId(), row);
+            }
+        }
     }
 
     private static Map<String, String> buildCountryNameIndex() {
