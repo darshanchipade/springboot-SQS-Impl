@@ -219,7 +219,6 @@ public class BedrockEnrichmentService {
 
     /**
      * Generic chat invoke for free-form prompts. Returns the first text block from the response.
-     * The caller is responsible for further parsing (e.g., JSON).
      */
     public String invokeChatForText(String content, Integer overrideMaxTokens) {
         String effectiveModelId = this.bedrockModelId;

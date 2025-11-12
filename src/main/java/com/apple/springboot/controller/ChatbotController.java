@@ -51,43 +51,21 @@ public class ChatbotController {
         return ResponseEntity.ok(aiPromptSearchService.aiSearch(request));
     }
 
-    @Operation(
-            summary = "Explicit AI search endpoint",
-            description = "Explicit AI endpoint with the same behavior as /query. " +
-                    "Performs an AI-powered search based on the user's message and optional filters."
-    )
-    @ApiResponses(value = {
-            @ApiResponse(responseCode = "200", description = "Successfully retrieved search results",
-                    content = @Content(mediaType = "application/json",
-                            schema = @Schema(implementation = ChatbotResultDto.class))),
-            @ApiResponse(responseCode = "400", description = "Bad request - message is null or empty",
-                    content = @Content)
-    })
-    @PostMapping("/ai-search")
-    public ResponseEntity<List<ChatbotResultDto>> aiSearch(@RequestBody ChatbotRequest request) {
-        if (request == null || !StringUtils.hasText(request.getMessage())) {
-            return ResponseEntity.badRequest().body(Collections.emptyList());
-        }
-        return ResponseEntity.ok(aiPromptSearchService.aiSearch(request));
-    }
+    // Optional: explicit AI endpoint (same behavior)
+//    @PostMapping("/ai-search")
+//    public ResponseEntity<List<ChatbotResultDto>> aiSearch(@RequestBody ChatbotRequest request) {
+//        if (request == null || !StringUtils.hasText(request.getMessage())) {
+//            return ResponseEntity.badRequest().body(Collections.emptyList());
+//        }
+//        return ResponseEntity.ok(aiPromptSearchService.aiSearch(request));
+//    }
 
-    @Operation(
-            summary = "Legacy chatbot query",
-            description = "Optional legacy behavior endpoint for comparison purposes. " +
-                    "Uses the original chatbot service implementation."
-    )
-    @ApiResponses(value = {
-            @ApiResponse(responseCode = "200", description = "Successfully retrieved search results",
-                    content = @Content(mediaType = "application/json",
-                            schema = @Schema(implementation = ChatbotResultDto.class))),
-            @ApiResponse(responseCode = "400", description = "Bad request - message is null or empty",
-                    content = @Content)
-    })
-    @PostMapping("/query-legacy")
-    public ResponseEntity<List<ChatbotResultDto>> legacy(@RequestBody ChatbotRequest request) {
-        if (request == null || !StringUtils.hasText(request.getMessage())) {
-            return ResponseEntity.badRequest().body(Collections.emptyList());
-        }
-        return ResponseEntity.ok(chatbotService.query(request));
-    }
+    // Optional: legacy behavior if you need it for comparison
+//    @PostMapping("/query-legacy")
+//    public ResponseEntity<List<ChatbotResultDto>> legacy(@RequestBody ChatbotRequest request) {
+//        if (request == null || !StringUtils.hasText(request.getMessage())) {
+//            return ResponseEntity.badRequest().body(Collections.emptyList());
+//        }
+//        return ResponseEntity.ok(chatbotService.query(request));
+//    }
 }
