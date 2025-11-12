@@ -286,13 +286,56 @@ public class ChatbotService {
         if (m.find()) {
             return normalizeKey(m.group(0));
         }
-        for (String token : message.split("\\s+")) {
-            long hyphens = token.chars().filter(ch -> ch == '-').count();
-            if (hyphens >= 2) {
+
+        String[] tokens = message.split("\\s+");
+
+        for (String raw : tokens) {
+            String token = sanitizeToken(raw);
+            if (!StringUtils.hasText(token)) {
+                continue;
+            }
+            long hyphenCount = token.chars().filter(ch -> ch == '-').count();
+            if (hyphenCount >= 2) {
                 return normalizeKey(token);
             }
         }
+
+        for (String raw : tokens) {
+            String candidate = maybeSectionKeyFromToken(raw);
+            if (StringUtils.hasText(candidate)) {
+                return normalizeKey(candidate);
+            }
+        }
+
         return null;
+    }
+
+    private String sanitizeToken(String token) {
+        if (!StringUtils.hasText(token)) {
+            return null;
+        }
+        String cleaned = token.trim()
+                .replaceAll("^[^A-Za-z0-9_-]+", "")
+                .replaceAll("[^A-Za-z0-9_-]+$", "")
+                .toLowerCase(Locale.ROOT);
+        return StringUtils.hasText(cleaned) ? cleaned : null;
+    }
+
+    private String maybeSectionKeyFromToken(String raw) {
+        String token = sanitizeToken(raw);
+        if (!StringUtils.hasText(token)) {
+            return null;
+        }
+        if (!token.contains("-")) {
+            return null;
+        }
+        if (LOCALE_PATTERN.matcher(token).matches()) {
+            return null;
+        }
+        if (!token.endsWith("-section")) {
+            token = token + "-section";
+        }
+        return token;
     }
 
     private String normalizeKey(String key) {
@@ -1041,23 +1084,87 @@ public class ChatbotService {
         LinkedHashSet<String> variants = new LinkedHashSet<>();
         variants.add(normalized);
 
-        if (normalized.endsWith("-section")) {
-            variants.add(normalized.substring(0, normalized.length() - "-section".length()));
-        }
-        if (normalized.endsWith("-section") || normalized.endsWith("-items")) {
-            variants.add(normalized + "-items");
-        } else {
-            variants.add(normalized + "-section");
-            variants.add(normalized + "-items");
+        String root = stripKnownSuffixes(normalized);
+        addVariantsFromRoot(variants, root);
+
+        String singularRoot = singularizeKeySegment(root);
+        if (StringUtils.hasText(singularRoot) && !singularRoot.equals(root)) {
+            addVariantsFromRoot(variants, singularRoot);
         }
 
-        variants.add(normalized + "-items-horizontal");
-        variants.add(normalized + "-items-vertical");
-        variants.add(normalized + "-items-wide");
-        variants.add(normalized + "-items-desktop");
-        variants.add(normalized + "-items-mobile");
+        String normalizedSingular = singularizeKeySegment(normalized);
+        if (StringUtils.hasText(normalizedSingular)) {
+            variants.add(normalizedSingular);
+        }
 
         return new ArrayList<>(variants);
+    }
+
+    private void addVariantsFromRoot(Set<String> variants, String root) {
+        if (!StringUtils.hasText(root)) {
+            return;
+        }
+        String base = root.toLowerCase(Locale.ROOT).trim();
+        variants.add(base);
+        variants.add(base + "-section");
+        variants.add(base + "-items");
+        variants.add(base + "-items-horizontal");
+        variants.add(base + "-items-vertical");
+        variants.add(base + "-items-wide");
+        variants.add(base + "-items-desktop");
+        variants.add(base + "-items-mobile");
+    }
+
+    private String stripKnownSuffixes(String key) {
+        if (!StringUtils.hasText(key)) {
+            return key;
+        }
+        String result = key.toLowerCase(Locale.ROOT).trim();
+        String[] suffixes = {
+                "-items-horizontal",
+                "-items-vertical",
+                "-items-wide",
+                "-items-desktop",
+                "-items-mobile",
+                "-items",
+                "-section"
+        };
+        boolean stripped;
+        do {
+            stripped = false;
+            for (String suffix : suffixes) {
+                if (result.endsWith(suffix)) {
+                    result = result.substring(0, result.length() - suffix.length());
+                    stripped = true;
+                    break;
+                }
+            }
+        } while (stripped && StringUtils.hasText(result));
+        return result;
+    }
+
+    private String singularizeKeySegment(String key) {
+        if (!StringUtils.hasText(key)) {
+            return key;
+        }
+        String value = key.toLowerCase(Locale.ROOT).trim();
+        int idx = value.lastIndexOf('-');
+        String prefix = idx >= 0 ? value.substring(0, idx + 1) : "";
+        String segment = idx >= 0 ? value.substring(idx + 1) : value;
+        if (segment.length() <= 3) {
+            return key;
+        }
+        if (segment.endsWith("ies") && segment.length() > 3) {
+            segment = segment.substring(0, segment.length() - 3) + "y";
+        } else if (segment.endsWith("ses") && segment.length() > 3) {
+            segment = segment.substring(0, segment.length() - 2);
+        } else if (segment.endsWith("s") && segment.length() > 3 && !segment.endsWith("ss")) {
+            segment = segment.substring(0, segment.length() - 1);
+        } else {
+            return key;
+        }
+        String singular = prefix + segment;
+        return StringUtils.hasText(singular) ? singular : key;
     }
 
     private static Map<String, String> buildCountryNameIndex() {
