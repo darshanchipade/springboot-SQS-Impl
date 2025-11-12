@@ -140,19 +140,9 @@ public class ChatbotService {
                         sectionKeyFinal,
                         Math.max(limit * 4, 2000)));
 
-                String base = sectionKeyFinal;
-                if (base.endsWith("-section")) {
-                    base = base.substring(0, base.length() - "-section".length());
-                }
-                String[] candidates = new String[]{
-                        sectionKeyFinal + "-items",
-                        base,
-                        base + "-section-items"
-                };
-                for (String candidate : candidates) {
-                    if (!StringUtils.hasText(candidate)) continue;
+                for (String variant : buildSectionKeyVariants(sectionKeyFinal)) {
                     addSectionRows(agg, consolidatedRepo.findBySectionKey(
-                            candidate.toLowerCase(Locale.ROOT),
+                            variant,
                             Math.max(limit * 4, 2000)));
                 }
 
@@ -953,6 +943,33 @@ public class ChatbotService {
         }
 
         return trimmed;
+    }
+
+    private List<String> buildSectionKeyVariants(String sectionKey) {
+        if (!StringUtils.hasText(sectionKey)) {
+            return List.of();
+        }
+        String normalized = sectionKey.toLowerCase(Locale.ROOT).trim();
+        LinkedHashSet<String> variants = new LinkedHashSet<>();
+        variants.add(normalized);
+
+        if (normalized.endsWith("-section")) {
+            variants.add(normalized.substring(0, normalized.length() - "-section".length()));
+        }
+        if (normalized.endsWith("-section") || normalized.endsWith("-items")) {
+            variants.add(normalized + "-items");
+        } else {
+            variants.add(normalized + "-section");
+            variants.add(normalized + "-items");
+        }
+
+        variants.add(normalized + "-items-horizontal");
+        variants.add(normalized + "-items-vertical");
+        variants.add(normalized + "-items-wide");
+        variants.add(normalized + "-items-desktop");
+        variants.add(normalized + "-items-mobile");
+
+        return new ArrayList<>(variants);
     }
 
     private static Map<String, String> buildCountryNameIndex() {
