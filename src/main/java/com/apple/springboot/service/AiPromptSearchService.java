@@ -590,14 +590,14 @@ public class AiPromptSearchService {
             return true;
         }
         Map<String, Object> sectionContext = section.getContext();
-        if (sectionContext == null || sectionContext.isEmpty()) {
-            return false;
-        }
         for (Map.Entry<List<String>, Set<String>> entry : filterIndex.entrySet()) {
             if (entry.getValue().isEmpty()) {
                 continue;
             }
-            Object actual = resolveContextValue(sectionContext, entry.getKey());
+            Object actual = null;
+            if (sectionContext != null && !sectionContext.isEmpty()) {
+                actual = resolveContextValue(sectionContext, entry.getKey());
+            }
             if (!contextValueMatches(section, actual, entry.getValue(), entry.getKey(), optionalPaths)) {
                 return false;
             }
