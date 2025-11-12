@@ -45,26 +45,6 @@ public class ChatbotService {
                     .collect(Collectors.toSet())
     );
     private static final Map<String, String> COUNTRY_NAME_INDEX = buildCountryNameIndex();
-    private static final Set<String> ROLE_KEYWORDS = Set.of(
-            "analytics",
-            "headline",
-            "body",
-            "bodycopy",
-            "summary",
-            "description",
-            "cta",
-            "link",
-            "badge",
-            "price",
-            "legal",
-            "disclaimer",
-            "gallery",
-            "image",
-            "image_alt_text",
-            "alt",
-            "button",
-            "title"
-    );
 
     public ChatbotService(VectorSearchService vectorSearchService,
                           ConsolidatedEnrichedSectionRepository consolidatedRepo) {
@@ -92,23 +72,17 @@ public class ChatbotService {
             enrichCriteriaFromContext(localeCriteria, request.getContext());
         }
 
-        String roleHint = null;
-        boolean userExplicitRole = false;
-        if (request != null && StringUtils.hasText(request.getOriginal_field_name())) {
-            roleHint = request.getOriginal_field_name().trim().toLowerCase(Locale.ROOT);
-            userExplicitRole = StringUtils.hasText(roleHint);
-        } else if (userExplicitlyRequestedRole(message, key)) {
+        boolean explicitRole = request != null && StringUtils.hasText(request.getOriginal_field_name());
+        String roleHint = explicitRole ? request.getOriginal_field_name().trim().toLowerCase(Locale.ROOT) : null;
+        boolean inferredRole = false;
+        if (!explicitRole && userExplicitlyRequestedRole(message, key)) {
             String inferred = inferRoleHint(message, key);
             if (StringUtils.hasText(inferred)) {
-                String normalized = inferred.toLowerCase(Locale.ROOT);
-                if (ROLE_KEYWORDS.contains(normalized)) {
-                    roleHint = normalized;
-                    userExplicitRole = true;
-                }
+                roleHint = inferred.trim().toLowerCase(Locale.ROOT);
+                inferredRole = true;
             }
         }
-        boolean hasRoleQuery = userExplicitRole && StringUtils.hasText(roleHint);
-        int vectorPreLimit = hasRoleQuery ? Math.min(limit * 3, 100) : limit;
+        int vectorPreLimit = StringUtils.hasText(roleHint) ? Math.min(limit * 3, 100) : limit;
 
         try {
             String embeddingQuery = StringUtils.hasText(message) ? message : key;
@@ -158,14 +132,6 @@ public class ChatbotService {
 
             vectorDtos = applyCriteriaFilter(vectorDtos, localeCriteria);
 
-            // Post-filter vector by partial role (case-insensitive) when provided
-            if (hasRoleQuery) {
-                String roleFilter = roleHint.toLowerCase(Locale.ROOT);
-                vectorDtos = vectorDtos.stream()
-                        .filter(d -> d.getContentRole() != null && d.getContentRole().toLowerCase().contains(roleFilter))
-                        .collect(Collectors.toList());
-            }
-
             // Consolidated search: prioritise explicit section-key matches, fallback to metadata query
             List<ConsolidatedEnrichedSection> consolidatedMatches = new ArrayList<>();
             if (StringUtils.hasText(sectionKeyFinal)) {
@@ -196,12 +162,25 @@ public class ChatbotService {
                 }
             }
 
-            // Partial role filtering (contains, case-insensitive) for consolidated
-            if (hasRoleQuery) {
+            boolean applyRoleFilter = false;
+            if (explicitRole && StringUtils.hasText(roleHint)) {
+                applyRoleFilter = true;
+            } else if (inferredRole && StringUtils.hasText(roleHint)) {
+                if (roleExists(roleHint, vectorDtos, consolidatedMatches)) {
+                    applyRoleFilter = true;
+                } else {
+                    roleHint = null;
+                }
+            }
+
+            if (applyRoleFilter && StringUtils.hasText(roleHint)) {
                 final String roleFilter = roleHint.toLowerCase(Locale.ROOT);
+                vectorDtos = vectorDtos.stream()
+                        .filter(d -> d.getContentRole() != null && d.getContentRole().toLowerCase(Locale.ROOT).contains(roleFilter))
+                        .collect(Collectors.toList());
                 consolidatedMatches = consolidatedMatches.stream()
                         .filter(s -> s.getOriginalFieldName() != null
-                                && s.getOriginalFieldName().toLowerCase().contains(roleFilter))
+                                && s.getOriginalFieldName().toLowerCase(Locale.ROOT).contains(roleFilter))
                         .collect(Collectors.toList());
             }
 
@@ -244,7 +223,7 @@ public class ChatbotService {
             }
 
             List<ChatbotResultDto> mergedList = finalizeResults(new ArrayList<>(merged.values()),
-                    localeCriteria, request, sectionKeyFinal, roleHint, userExplicitRole, limit);
+                    localeCriteria, request, sectionKeyFinal, roleHint, applyRoleFilter, limit);
 
             if (mergedList.isEmpty() && StringUtils.hasText(sectionKeyFinal)) {
                 LinkedHashMap<UUID, ConsolidatedEnrichedSection> fallbackAgg = new LinkedHashMap<>();
@@ -258,7 +237,7 @@ public class ChatbotService {
                 if (fallbackRows.isEmpty()) {
                     fallbackRows = consolidatedRepo.findByMetadataQuery(sectionKeyFinal, Math.max(limit * 2, 50));
                 }
-                if (hasRoleQuery && request != null) {
+                if (applyRoleFilter && StringUtils.hasText(roleHint)) {
                     final String roleFilter = roleHint.toLowerCase(Locale.ROOT);
                     fallbackRows = fallbackRows.stream()
                             .filter(s -> s.getOriginalFieldName() != null
@@ -290,7 +269,7 @@ public class ChatbotService {
                         .collect(Collectors.toList());
 
                 fallbackDtos = applyCriteriaFilter(fallbackDtos, localeCriteria);
-                mergedList = finalizeResults(fallbackDtos, localeCriteria, request, sectionKeyFinal, roleHint, userExplicitRole, limit);
+                mergedList = finalizeResults(fallbackDtos, localeCriteria, request, sectionKeyFinal, roleHint, applyRoleFilter, limit);
             }
 
             return mergedList;
@@ -957,12 +936,38 @@ public class ChatbotService {
         }
     }
 
+    private boolean roleExists(String roleHint,
+                               List<ChatbotResultDto> vectorDtos,
+                               List<ConsolidatedEnrichedSection> consolidatedMatches) {
+        if (!StringUtils.hasText(roleHint)) {
+            return false;
+        }
+        String needle = roleHint.toLowerCase(Locale.ROOT);
+        if (vectorDtos != null) {
+            for (ChatbotResultDto dto : vectorDtos) {
+                if (dto.getContentRole() != null
+                        && dto.getContentRole().toLowerCase(Locale.ROOT).contains(needle)) {
+                    return true;
+                }
+            }
+        }
+        if (consolidatedMatches != null) {
+            for (ConsolidatedEnrichedSection section : consolidatedMatches) {
+                if (section != null && section.getOriginalFieldName() != null
+                        && section.getOriginalFieldName().toLowerCase(Locale.ROOT).contains(needle)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     private List<ChatbotResultDto> finalizeResults(List<ChatbotResultDto> items,
                                                    LocaleCriteria localeCriteria,
                                                    ChatbotRequest request,
                                                    String sectionKey,
                                                    String roleHint,
-                                                   boolean userExplicitRole,
+                                                   boolean applyRoleFilter,
                                                    int limit) {
         if (items == null || items.isEmpty()) {
             return List.of();
@@ -983,7 +988,7 @@ public class ChatbotService {
             if (StringUtils.hasText(sectionKey)) {
                 terms.add(sectionKey);
             }
-            if (userExplicitRole && StringUtils.hasText(roleHint)) {
+            if (applyRoleFilter && StringUtils.hasText(roleHint)) {
                 terms.add(roleHint);
             }
             if (request != null && request.getTags() != null) {
