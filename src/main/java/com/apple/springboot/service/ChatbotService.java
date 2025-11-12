@@ -216,64 +216,54 @@ public class ChatbotService {
                 merged.putIfAbsent(dedupKey, d);
             }
 
-            List<ChatbotResultDto> mergedList = new ArrayList<>(merged.values());
+            List<ChatbotResultDto> mergedList = finalizeResults(new ArrayList<>(merged.values()),
+                    localeCriteria, request, sectionKeyFinal, hasRoleQuery, limit);
 
-            // Trim to limit after filtering
-            if (mergedList.size() > limit) {
-                mergedList = mergedList.subList(0, limit);
-            }
-
-            String inferredLocale = localeCriteria.locales.isEmpty() ? null : localeCriteria.locales.iterator().next();
-            String inferredCountry = localeCriteria.countries.isEmpty() ? null : localeCriteria.countries.iterator().next();
-            String inferredLanguage = localeCriteria.languages.isEmpty() ? null : localeCriteria.languages.iterator().next();
-
-            // Assign cf ids; enrich match_terms with tags/keywords and role if provided
-            for (int i = 0; i < mergedList.size(); i++) {
-                ChatbotResultDto item = mergedList.get(i);
-                item.setCfId("cf" + (i + 1));
-
-                var terms = new java.util.LinkedHashSet<String>();
-                terms.add(sectionKeyFinal);
-                if (hasRoleQuery) {
-                    terms.add(request.getOriginal_field_name());
+            if (mergedList.isEmpty() && StringUtils.hasText(sectionKeyFinal)) {
+                LinkedHashMap<UUID, ConsolidatedEnrichedSection> fallbackAgg = new LinkedHashMap<>();
+                addSectionRows(fallbackAgg, consolidatedRepo.findBySectionKey(
+                        sectionKeyFinal,
+                        Math.max(limit * 4, 2000)));
+                addSectionRows(fallbackAgg, consolidatedRepo.findByContextSectionKey(
+                        sectionKeyFinal,
+                        Math.max(limit * 4, 2000)));
+                List<ConsolidatedEnrichedSection> fallbackRows = new ArrayList<>(fallbackAgg.values());
+                if (fallbackRows.isEmpty()) {
+                    fallbackRows = consolidatedRepo.findByMetadataQuery(sectionKeyFinal, Math.max(limit * 2, 50));
                 }
-                if (request != null && request.getTags() != null) {
-                    terms.addAll(request.getTags());
-                }
-                if (request != null && request.getKeywords() != null) {
-                    terms.addAll(request.getKeywords());
-                }
-                if (!localeCriteria.pageIds.isEmpty()) {
-                    terms.addAll(localeCriteria.pageIds);
-                }
-                item.setMatchTerms(new ArrayList<>(terms));
-
-                if (!StringUtils.hasText(item.getLocale()) && StringUtils.hasText(inferredLocale)) {
-                    item.setLocale(inferredLocale);
-                }
-                if (!StringUtils.hasText(item.getCountry()) && StringUtils.hasText(inferredCountry)) {
-                    item.setCountry(inferredCountry);
-                }
-                if (!StringUtils.hasText(item.getLanguage()) && StringUtils.hasText(inferredLanguage)) {
-                    item.setLanguage(inferredLanguage);
+                if (hasRoleQuery && request != null) {
+                    final String roleFilter = request.getOriginal_field_name().toLowerCase(Locale.ROOT);
+                    fallbackRows = fallbackRows.stream()
+                            .filter(s -> s.getOriginalFieldName() != null
+                                    && s.getOriginalFieldName().toLowerCase(Locale.ROOT).contains(roleFilter))
+                            .collect(Collectors.toList());
                 }
 
-                if (StringUtils.hasText(item.getLocale())) {
-                    String normalized = normalizeLocale(item.getLocale());
-                    if (StringUtils.hasText(normalized)) {
-                        int idx = normalized.indexOf('_');
-                        if (idx > 0) {
-                            String langPart = normalized.substring(0, idx);
-                            String countryPart = normalized.substring(idx + 1);
-                            if (!StringUtils.hasText(item.getLanguage())) {
-                                item.setLanguage(langPart);
-                            }
-                            if (!StringUtils.hasText(item.getCountry())) {
-                                item.setCountry(countryPart);
-                            }
-                        }
-                    }
-                }
+                List<ChatbotResultDto> fallbackDtos = fallbackRows.stream()
+                        .map(section -> {
+                            ChatbotResultDto dto = new ChatbotResultDto();
+                            dto.setSection(sectionKeyFinal);
+                            dto.setSectionPath(section.getSectionPath());
+                            dto.setSectionUri(section.getSectionUri());
+                            dto.setCleansedText(section.getCleansedText());
+                            dto.setSource("consolidated_enriched_sections");
+                            dto.setContentRole(section.getOriginalFieldName());
+                            dto.setLastModified(section.getSavedAt() != null ? section.getSavedAt().toString() : null);
+                            dto.setMatchTerms(List.of(sectionKeyFinal));
+
+                            LocaleTriple localeInfo = resolveLocaleInfo(section, localeCriteria);
+                            dto.setLocale(localeInfo.locale());
+                            dto.setLanguage(localeInfo.language());
+                            dto.setCountry(localeInfo.country());
+
+                            dto.setTenant(extractTenant(section));
+                            dto.setPageId(extractPageId(section));
+                            return dto;
+                        })
+                        .collect(Collectors.toList());
+
+                fallbackDtos = applyCriteriaFilter(fallbackDtos, localeCriteria);
+                mergedList = finalizeResults(fallbackDtos, localeCriteria, request, sectionKeyFinal, hasRoleQuery, limit);
             }
 
             return mergedList;
@@ -893,6 +883,76 @@ public class ChatbotService {
                 agg.putIfAbsent(row.getId(), row);
             }
         }
+    }
+
+    private List<ChatbotResultDto> finalizeResults(List<ChatbotResultDto> items,
+                                                   LocaleCriteria localeCriteria,
+                                                   ChatbotRequest request,
+                                                   String sectionKey,
+                                                   boolean hasRoleQuery,
+                                                   int limit) {
+        if (items == null || items.isEmpty()) {
+            return List.of();
+        }
+
+        List<ChatbotResultDto> trimmed = items.size() > limit ? new ArrayList<>(items.subList(0, limit))
+                : new ArrayList<>(items);
+
+        String inferredLocale = localeCriteria.locales.isEmpty() ? null : localeCriteria.locales.iterator().next();
+        String inferredCountry = localeCriteria.countries.isEmpty() ? null : localeCriteria.countries.iterator().next();
+        String inferredLanguage = localeCriteria.languages.isEmpty() ? null : localeCriteria.languages.iterator().next();
+
+        for (int i = 0; i < trimmed.size(); i++) {
+            ChatbotResultDto item = trimmed.get(i);
+            item.setCfId("cf" + (i + 1));
+
+            var terms = new LinkedHashSet<String>();
+            if (StringUtils.hasText(sectionKey)) {
+                terms.add(sectionKey);
+            }
+            if (hasRoleQuery && request != null && StringUtils.hasText(request.getOriginal_field_name())) {
+                terms.add(request.getOriginal_field_name());
+            }
+            if (request != null && request.getTags() != null) {
+                terms.addAll(request.getTags());
+            }
+            if (request != null && request.getKeywords() != null) {
+                terms.addAll(request.getKeywords());
+            }
+            if (!localeCriteria.pageIds.isEmpty()) {
+                terms.addAll(localeCriteria.pageIds);
+            }
+            item.setMatchTerms(new ArrayList<>(terms));
+
+            if (!StringUtils.hasText(item.getLocale()) && StringUtils.hasText(inferredLocale)) {
+                item.setLocale(inferredLocale);
+            }
+            if (!StringUtils.hasText(item.getCountry()) && StringUtils.hasText(inferredCountry)) {
+                item.setCountry(inferredCountry);
+            }
+            if (!StringUtils.hasText(item.getLanguage()) && StringUtils.hasText(inferredLanguage)) {
+                item.setLanguage(inferredLanguage);
+            }
+
+            if (StringUtils.hasText(item.getLocale())) {
+                String normalized = normalizeLocale(item.getLocale());
+                if (StringUtils.hasText(normalized)) {
+                    int idx = normalized.indexOf('_');
+                    if (idx > 0) {
+                        String langPart = normalized.substring(0, idx);
+                        String countryPart = normalized.substring(idx + 1);
+                        if (!StringUtils.hasText(item.getLanguage())) {
+                            item.setLanguage(langPart);
+                        }
+                        if (!StringUtils.hasText(item.getCountry())) {
+                            item.setCountry(countryPart);
+                        }
+                    }
+                }
+            }
+        }
+
+        return trimmed;
     }
 
     private static Map<String, String> buildCountryNameIndex() {
