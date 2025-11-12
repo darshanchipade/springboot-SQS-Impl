@@ -45,6 +45,26 @@ public class ChatbotService {
                     .collect(Collectors.toSet())
     );
     private static final Map<String, String> COUNTRY_NAME_INDEX = buildCountryNameIndex();
+    private static final Set<String> ROLE_KEYWORDS = Set.of(
+            "analytics",
+            "headline",
+            "body",
+            "bodycopy",
+            "summary",
+            "description",
+            "cta",
+            "link",
+            "badge",
+            "price",
+            "legal",
+            "disclaimer",
+            "gallery",
+            "image",
+            "image_alt_text",
+            "alt",
+            "button",
+            "title"
+    );
 
     public ChatbotService(VectorSearchService vectorSearchService,
                           ConsolidatedEnrichedSectionRepository consolidatedRepo) {
@@ -72,11 +92,20 @@ public class ChatbotService {
             enrichCriteriaFromContext(localeCriteria, request.getContext());
         }
 
-        String roleHint = request != null ? request.getOriginal_field_name() : null;
-        boolean userExplicitRole = (request != null && StringUtils.hasText(request.getOriginal_field_name()))
-                || userExplicitlyRequestedRole(message, key);
-        if (!StringUtils.hasText(roleHint)) {
-            roleHint = inferRoleHint(message, key);
+        String roleHint = null;
+        boolean userExplicitRole = false;
+        if (request != null && StringUtils.hasText(request.getOriginal_field_name())) {
+            roleHint = request.getOriginal_field_name().trim().toLowerCase(Locale.ROOT);
+            userExplicitRole = StringUtils.hasText(roleHint);
+        } else if (userExplicitlyRequestedRole(message, key)) {
+            String inferred = inferRoleHint(message, key);
+            if (StringUtils.hasText(inferred)) {
+                String normalized = inferred.toLowerCase(Locale.ROOT);
+                if (ROLE_KEYWORDS.contains(normalized)) {
+                    roleHint = normalized;
+                    userExplicitRole = true;
+                }
+            }
         }
         boolean hasRoleQuery = userExplicitRole && StringUtils.hasText(roleHint);
         int vectorPreLimit = hasRoleQuery ? Math.min(limit * 3, 100) : limit;
