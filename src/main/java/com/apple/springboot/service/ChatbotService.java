@@ -105,30 +105,35 @@ public class ChatbotService {
             );
 
             final String sectionKeyFinal = key;
+            final Set<String> sectionKeyVariants = StringUtils.hasText(sectionKeyFinal)
+                    ? new LinkedHashSet<>(buildSectionKeyVariants(sectionKeyFinal))
+                    : Collections.emptySet();
 
-            List<ChatbotResultDto> vectorDtos = results.stream()
-                    .map(r -> {
-                        var section = r.getContentChunk().getConsolidatedEnrichedSection();
-                        ChatbotResultDto dto = new ChatbotResultDto();
-                        dto.setSection(sectionKeyFinal);
-                        dto.setSectionPath(section.getSectionPath());
-                        dto.setSectionUri(section.getSectionUri());
-                        dto.setCleansedText(section.getCleansedText());
-                        dto.setSource("content_chunks");
-                        dto.setContentRole(section.getOriginalFieldName());
-                        dto.setLastModified(section.getSavedAt() != null ? section.getSavedAt().toString() : null);
-                        dto.setMatchTerms(List.of(sectionKeyFinal));
+            List<ChatbotResultDto> vectorDtos = new ArrayList<>();
+            for (ContentChunkWithDistance result : results) {
+                var section = result.getContentChunk().getConsolidatedEnrichedSection();
+                if (!sectionKeyVariants.isEmpty() && !matchesSectionKey(section, sectionKeyVariants)) {
+                    continue;
+                }
+                ChatbotResultDto dto = new ChatbotResultDto();
+                dto.setSection(sectionKeyFinal);
+                dto.setSectionPath(section.getSectionPath());
+                dto.setSectionUri(section.getSectionUri());
+                dto.setCleansedText(section.getCleansedText());
+                dto.setSource("content_chunks");
+                dto.setContentRole(section.getOriginalFieldName());
+                dto.setLastModified(section.getSavedAt() != null ? section.getSavedAt().toString() : null);
+                dto.setMatchTerms(List.of(sectionKeyFinal));
 
-                        LocaleTriple localeInfo = resolveLocaleInfo(section, localeCriteria);
-                        dto.setLocale(localeInfo.locale());
-                        dto.setLanguage(localeInfo.language());
-                        dto.setCountry(localeInfo.country());
+                LocaleTriple localeInfo = resolveLocaleInfo(section, localeCriteria);
+                dto.setLocale(localeInfo.locale());
+                dto.setLanguage(localeInfo.language());
+                dto.setCountry(localeInfo.country());
 
-                        dto.setTenant(extractTenant(section));
-                        dto.setPageId(extractPageId(section));
-                        return dto;
-                    })
-                    .collect(Collectors.toList());
+                dto.setTenant(extractTenant(section));
+                dto.setPageId(extractPageId(section));
+                vectorDtos.add(dto);
+            }
 
             vectorDtos = applyCriteriaFilter(vectorDtos, localeCriteria);
 
@@ -160,6 +165,12 @@ public class ChatbotService {
                 } else if (StringUtils.hasText(sectionKeyFinal)) {
                     consolidatedMatches = consolidatedRepo.findBySectionKey(sectionKeyFinal, Math.max(limit * 2, 50));
                 }
+            }
+
+            if (!sectionKeyVariants.isEmpty() && !consolidatedMatches.isEmpty()) {
+                consolidatedMatches = consolidatedMatches.stream()
+                        .filter(section -> matchesSectionKey(section, sectionKeyVariants))
+                        .collect(Collectors.toList());
             }
 
             boolean applyRoleFilter = false;
@@ -237,6 +248,11 @@ public class ChatbotService {
                 if (fallbackRows.isEmpty()) {
                     fallbackRows = consolidatedRepo.findByMetadataQuery(sectionKeyFinal, Math.max(limit * 2, 50));
                 }
+                if (!sectionKeyVariants.isEmpty()) {
+                    fallbackRows = fallbackRows.stream()
+                            .filter(section -> matchesSectionKey(section, sectionKeyVariants))
+                            .collect(Collectors.toList());
+                }
                 if (applyRoleFilter && StringUtils.hasText(roleHint)) {
                     final String roleFilter = roleHint.toLowerCase(Locale.ROOT);
                     fallbackRows = fallbackRows.stream()
@@ -275,6 +291,77 @@ public class ChatbotService {
             return mergedList;
         } catch (Exception e) {
             return List.of();
+        }
+    }
+
+    private boolean matchesSectionKey(ConsolidatedEnrichedSection section, Set<String> variants) {
+        if (section == null || variants == null || variants.isEmpty()) {
+            return true;
+        }
+        String original = normalizeKey(section.getOriginalFieldName());
+        String path = section.getSectionPath() != null ? section.getSectionPath().toLowerCase(Locale.ROOT) : null;
+        String uri = section.getSectionUri() != null ? section.getSectionUri().toLowerCase(Locale.ROOT) : null;
+        List<String> contextKeys = extractContextSectionKeyValues(section);
+
+        for (String variant : variants) {
+            if (!StringUtils.hasText(variant)) {
+                continue;
+            }
+            String needle = variant.toLowerCase(Locale.ROOT);
+            if (StringUtils.hasText(original) && (original.equals(needle) || original.contains(needle))) {
+                return true;
+            }
+            if (path != null && path.contains(needle)) {
+                return true;
+            }
+            if (uri != null && uri.contains(needle)) {
+                return true;
+            }
+            for (String ctx : contextKeys) {
+                if (ctx.contains(needle)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private List<String> extractContextSectionKeyValues(ConsolidatedEnrichedSection section) {
+        if (section == null || section.getContext() == null) {
+            return List.of();
+        }
+        List<String> values = new ArrayList<>();
+        collectContextStrings(section.getContext().get("sectionKey"), values);
+
+        Object facets = section.getContext().get("facets");
+        if (facets instanceof Map<?, ?> facetsMap) {
+            collectContextStrings(facetsMap.get("sectionKey"), values);
+        }
+
+        Object envelope = section.getContext().get("envelope");
+        if (envelope instanceof Map<?, ?> envelopeMap) {
+            collectContextStrings(envelopeMap.get("sectionKey"), values);
+            collectContextStrings(envelopeMap.get("usagePath"), values);
+        }
+
+        return values.stream()
+                .filter(StringUtils::hasText)
+                .map(str -> str.trim().toLowerCase(Locale.ROOT))
+                .collect(Collectors.toList());
+    }
+
+    private void collectContextStrings(Object value, List<String> target) {
+        if (value == null || target == null) {
+            return;
+        }
+        if (value instanceof String str) {
+            target.add(str);
+        } else if (value instanceof Collection<?> collection) {
+            for (Object item : collection) {
+                if (item instanceof String strItem) {
+                    target.add(strItem);
+                }
+            }
         }
     }
 
