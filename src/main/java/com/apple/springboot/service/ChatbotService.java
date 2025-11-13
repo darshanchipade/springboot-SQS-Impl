@@ -118,7 +118,7 @@ public class ChatbotService {
         try {
             List<ContentChunkWithDistance> rows = vectorSearchService.search(
                     criteria.embeddingQuery(),
-                    criteria.role(),
+                    null,
                     limit,
                     request != null ? request.getTags() : null,
                     request != null ? request.getKeywords() : null,
@@ -128,7 +128,14 @@ public class ChatbotService {
             );
 
             return rows.stream()
-                    .map(row -> mapSection(row.getContentChunk().getConsolidatedEnrichedSection(), "content_chunks"))
+                    .map(row -> {
+                        ConsolidatedEnrichedSection section = row.getContentChunk().getConsolidatedEnrichedSection();
+                        ChatbotResultDto dto = mapSection(section, "content_chunks");
+                        if (dto != null && !StringUtils.hasText(dto.getContentRole())) {
+                            dto.setContentRole(firstNonBlank(row.getContentChunk().getSourceField()));
+                        }
+                        return dto;
+                    })
                     .filter(Objects::nonNull)
                     .filter(dto -> matchesCriteria(dto, criteria))
                     .collect(Collectors.toCollection(ArrayList::new));
@@ -273,6 +280,10 @@ public class ChatbotService {
         if (criteria == null) {
             return true;
         }
+        if (StringUtils.hasText(criteria.role())
+                && !matchesRole(dto.getContentRole(), criteria.role())) {
+            return false;
+        }
         if (StringUtils.hasText(criteria.pageId())
                 && StringUtils.hasText(dto.getPageId())
                 && !dto.getPageId().equalsIgnoreCase(criteria.pageId())) {
@@ -299,7 +310,7 @@ public class ChatbotService {
         dto.setSectionPath(section.getSectionPath());
         dto.setSectionUri(section.getSectionUri());
         dto.setCleansedText(section.getCleansedText());
-        dto.setContentRole(section.getOriginalFieldName());
+        dto.setContentRole(resolveRole(section));
         dto.setSource(source);
         dto.setLastModified(formatTimestamp(section.getSavedAt()));
         dto.setTenant(resolveTenant(section));
@@ -399,6 +410,41 @@ public class ChatbotService {
             return locale.substring(0, 2).toLowerCase(Locale.ROOT);
         }
         return null;
+    }
+
+    private String resolveRole(ConsolidatedEnrichedSection section) {
+        if (section == null) {
+            return null;
+        }
+        if (StringUtils.hasText(section.getOriginalFieldName())) {
+            return section.getOriginalFieldName();
+        }
+        Map<String, Object> context = section.getContext();
+        String role = firstString(context != null ? context.get("sectionName") : null);
+        if (!StringUtils.hasText(role)) {
+            role = firstString(context != null ? context.get("elementName") : null);
+        }
+        Map<String, Object> envelope = asMap(context != null ? context.get("envelope") : null);
+        if (!StringUtils.hasText(role) && envelope != null) {
+            role = firstString(envelope.get("sectionName"));
+        }
+        Map<String, Object> facets = asMap(context != null ? context.get("facets") : null);
+        if (!StringUtils.hasText(role) && facets != null) {
+            role = firstString(facets.get("sectionName"));
+        }
+        return role;
+    }
+
+    private boolean matchesRole(String value, String desired) {
+        if (!StringUtils.hasText(desired)) {
+            return true;
+        }
+        String normalizedDesired = desired.trim().toLowerCase(Locale.ROOT);
+        if (!StringUtils.hasText(value)) {
+            return false;
+        }
+        String normalizedValue = value.trim().toLowerCase(Locale.ROOT);
+        return normalizedValue.contains(normalizedDesired);
     }
 
     private String resolveCountry(ConsolidatedEnrichedSection section, String locale) {
