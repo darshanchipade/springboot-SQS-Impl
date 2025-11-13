@@ -119,23 +119,21 @@ public class ChatbotService {
 
         int limit = determineLimit(request);
 
-        Map<String, Object> derivedContext = buildDerivedContext(criteria);
-        Map<String, Object> combinedContext = mergeContext(
-                requestContext,
-                interpretationContext
-        );
-        Map<String, Object> effectiveContext = sanitizeContext(
-                mergeContext(
-                        combinedContext,
-                        derivedContext
-                )
-        );
+        List<ChatbotResultDto> combined = runSearch(criteria, requestContext, interpretationContext, tagFilters, keywordFilters, limit);
 
-        List<ChatbotResultDto> vectorResults = fetchVectorResults(criteria, effectiveContext, limit, tagFilters, keywordFilters);
-        List<ChatbotResultDto> consolidatedResults = fetchConsolidatedResults(criteria, limit);
+        if (combined.isEmpty() && StringUtils.hasText(criteria.role())) {
+            SearchCriteria relaxed = criteria.withoutRole();
+            if (!relaxed.equals(criteria)) {
+                combined = runSearch(relaxed, requestContext, interpretationContext, tagFilters, keywordFilters, limit);
+                if (!combined.isEmpty()) {
+                    criteria = relaxed;
+                }
+            }
+        }
 
-        List<ChatbotResultDto> combined = mergeResults(vectorResults, consolidatedResults, limit);
-        assignCfIds(combined, criteria, tagFilters, keywordFilters);
+        if (!combined.isEmpty()) {
+            assignCfIds(combined, criteria, tagFilters, keywordFilters);
+        }
 
         return combined;
     }
@@ -182,6 +180,30 @@ public class ChatbotService {
         } catch (Exception ex) {
             return List.of();
         }
+    }
+
+    private List<ChatbotResultDto> runSearch(SearchCriteria criteria,
+                                             Map<String, Object> requestContext,
+                                             Map<String, Object> interpretationContext,
+                                             List<String> tags,
+                                             List<String> keywords,
+                                             int limit) {
+        Map<String, Object> derivedContext = buildDerivedContext(criteria);
+        Map<String, Object> combinedContext = mergeContext(
+                requestContext,
+                interpretationContext
+        );
+        Map<String, Object> effectiveContext = sanitizeContext(
+                mergeContext(
+                        combinedContext,
+                        derivedContext
+                )
+        );
+
+        List<ChatbotResultDto> vectorResults = fetchVectorResults(criteria, effectiveContext, limit, tags, keywords);
+        List<ChatbotResultDto> consolidatedResults = fetchConsolidatedResults(criteria, limit);
+
+        return mergeResults(vectorResults, consolidatedResults, limit);
     }
 
     private List<ChatbotResultDto> fetchConsolidatedResults(SearchCriteria criteria, int limit) {
@@ -1230,6 +1252,13 @@ public class ChatbotService {
                                   String message) {
         String embeddingQuery() {
             return StringUtils.hasText(message) ? message : sectionKey;
+        }
+
+        SearchCriteria withoutRole() {
+            if (role == null || role.isBlank()) {
+                return this;
+            }
+            return new SearchCriteria(sectionKey, null, locale, language, country, pageId, message);
         }
     }
 
