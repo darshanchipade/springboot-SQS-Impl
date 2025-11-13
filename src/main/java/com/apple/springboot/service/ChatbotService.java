@@ -32,6 +32,10 @@ public class ChatbotService {
 
     private static final Pattern SECTION_PATTERN = Pattern.compile("(?i)\\b([a-z0-9][a-z0-9\\s-]*section)\\b");
     private static final Pattern ROLE_PATTERN = Pattern.compile("(?i)\\bgive\\s+me\\s+([a-z0-9\\s-]+?)\\s+(?:for|of)\\b");
+    private static final Pattern ROLE_FOR_SECTION_PATTERN =
+            Pattern.compile("(?i)\\b([a-z0-9_-]{3,})\\s+(?:for|of|in|on)\\s+([a-z0-9][a-z0-9\\s-]*section)\\b");
+    private static final Pattern ROLE_BEFORE_SECTION_PATTERN =
+            Pattern.compile("(?i)\\b([a-z0-9_-]{3,})\\s+([a-z0-9][a-z0-9\\s-]*section)\\b");
     private static final Pattern MESSAGE_LOCALE_PATTERN = Pattern.compile("(?i)\\b([a-z]{2})[_-]([a-z]{2})\\b");
     private static final Pattern NORMALIZE_LOCALE_PATTERN = Pattern.compile("(?i)^([a-z]{2})[_-]([a-z]{2})$");
 
@@ -57,6 +61,16 @@ public class ChatbotService {
     );
 
     private static final Map<String, String> COUNTRY_TOKEN_TO_CODE;
+    private static final Set<String> ROLE_STOP_WORDS = Set.of(
+            "for",
+            "section",
+            "the",
+            "and",
+            "with",
+            "of",
+            "in",
+            "on"
+    );
 
     static {
         Map<String, String> tokens = new HashMap<>();
@@ -628,7 +642,10 @@ public class ChatbotService {
         }
         Matcher matcher = ROLE_PATTERN.matcher(message);
         if (matcher.find()) {
-            return normalizeRole(matcher.group(1));
+            String candidate = sanitizeRoleCandidate(matcher.group(1));
+            if (candidate != null) {
+                return candidate;
+            }
         }
         String lower = message.toLowerCase(Locale.ROOT);
         for (String keyword : KNOWN_ROLE_KEYWORDS) {
@@ -636,7 +653,41 @@ public class ChatbotService {
                 return keyword;
             }
         }
+        Matcher roleForSection = ROLE_FOR_SECTION_PATTERN.matcher(message);
+        if (roleForSection.find()) {
+            String candidate = sanitizeRoleCandidate(roleForSection.group(1));
+            if (candidate != null) {
+                return candidate;
+            }
+        }
+        Matcher roleBeforeSection = ROLE_BEFORE_SECTION_PATTERN.matcher(message);
+        while (roleBeforeSection.find()) {
+            String candidate = sanitizeRoleCandidate(roleBeforeSection.group(1));
+            if (candidate != null) {
+                return candidate;
+            }
+        }
         return null;
+    }
+
+    private String sanitizeRoleCandidate(String candidate) {
+        if (!StringUtils.hasText(candidate)) {
+            return null;
+        }
+        String cleaned = candidate.trim()
+                .replaceAll("^[^A-Za-z0-9_-]+", "")
+                .replaceAll("[^A-Za-z0-9_-]+$", "");
+        if (!StringUtils.hasText(cleaned)) {
+            return null;
+        }
+        String lower = cleaned.toLowerCase(Locale.ROOT);
+        if (lower.length() < 3) {
+            return null;
+        }
+        if (ROLE_STOP_WORDS.contains(lower)) {
+            return null;
+        }
+        return lower;
     }
 
     private String extractPageId(String message) {
