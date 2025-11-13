@@ -45,6 +45,7 @@ public class ChatbotService {
     private static final Pattern NORMALIZE_LOCALE_PATTERN = Pattern.compile("(?i)^([a-z]{2})[_-]([a-z]{2})$");
     private static final Pattern TOKEN_PATTERN = Pattern.compile("[A-Za-z0-9_-]+");
 
+    private static final Set<String> DEFAULT_ROLE_KEYWORDS = Set.of("headline", "title", "copy", "body", "content", "description");
     private static final Set<String> ROLE_STOP_WORDS = Set.of(
             "for",
             "section",
@@ -110,8 +111,8 @@ public class ChatbotService {
             addNormalizedStrings(tagSet, request.getTags());
             addNormalizedStrings(keywordSet, request.getKeywords());
         }
-        List<String> tagFilters = List.copyOf(tagSet);
-        List<String> keywordFilters = List.copyOf(keywordSet);
+        List<String> tagFilters = new ArrayList<>(tagSet);
+        List<String> keywordFilters = new ArrayList<>(keywordSet);
 
         Map<String, Object> interpretationContext = interpretation != null && !interpretation.context().isEmpty()
                 ? new LinkedHashMap<>(interpretation.context())
@@ -696,7 +697,7 @@ public class ChatbotService {
             }
         }
         String lower = message.toLowerCase(Locale.ROOT);
-        for (String keyword : KNOWN_ROLE_KEYWORDS) {
+        for (String keyword : DEFAULT_ROLE_KEYWORDS) {
             if (lower.contains(keyword)) {
                 return keyword;
             }
@@ -864,6 +865,13 @@ public class ChatbotService {
                 Collections.unmodifiableSet(languages),
                 Collections.unmodifiableSet(countries)
         );
+    }
+
+    private String normalizeKey(String key) {
+        if (!StringUtils.hasText(key)) {
+            return null;
+        }
+        return key.trim().toLowerCase(Locale.ROOT);
     }
 
     private String slugify(String value) {
@@ -1035,11 +1043,10 @@ public class ChatbotService {
     }
 
     private Set<String> buildIsoLanguageCodes() {
-        return Collections.unmodifiableSet(
-                Arrays.stream(Locale.getISOLanguages())
-                        .map(code -> code.toLowerCase(Locale.ROOT))
-                        .collect(Collectors.toCollection(LinkedHashSet::new))
-        );
+        LinkedHashSet<String> codes = Arrays.stream(Locale.getISOLanguages())
+                .map(code -> code.toLowerCase(Locale.ROOT))
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        return Collections.unmodifiableSet(codes);
     }
 
     private Map<String, String> buildLanguageIndex() {
@@ -1064,11 +1071,10 @@ public class ChatbotService {
     }
 
     private Set<String> buildIsoCountryCodes() {
-        return Collections.unmodifiableSet(
-                Arrays.stream(Locale.getISOCountries())
-                        .map(code -> code.toUpperCase(Locale.ROOT))
-                        .collect(Collectors.toCollection(LinkedHashSet::new))
-        );
+        LinkedHashSet<String> codes = Arrays.stream(Locale.getISOCountries())
+                .map(code -> code.toUpperCase(Locale.ROOT))
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        return Collections.unmodifiableSet(codes);
     }
 
     private Map<String, String> buildIso3ToIso2Index() {

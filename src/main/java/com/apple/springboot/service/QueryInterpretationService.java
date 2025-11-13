@@ -12,6 +12,8 @@ import org.springframework.util.StringUtils;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -90,7 +92,7 @@ public class QueryInterpretationService {
                 values.add(text);
             }
         }
-        return List.copyOf(values);
+        return Collections.unmodifiableList(new ArrayList<>(values));
     }
 
     private Map<String, Object> readObject(JsonNode node) {
@@ -102,7 +104,10 @@ public class QueryInterpretationService {
         }
         @SuppressWarnings("unchecked")
         Map<String, Object> map = objectMapper.convertValue(node, Map.class);
-        return map != null ? Map.copyOf(map) : Map.of();
+        if (map == null) {
+            return Map.of();
+        }
+        return Collections.unmodifiableMap(new LinkedHashMap<>(map));
     }
 
     private String textOrNull(JsonNode node) {
