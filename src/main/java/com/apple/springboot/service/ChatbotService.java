@@ -4,6 +4,7 @@ import com.apple.springboot.model.ChatbotRequest;
 import com.apple.springboot.model.ChatbotResultDto;
 import com.apple.springboot.model.ContentChunkWithDistance;
 import com.apple.springboot.model.ConsolidatedEnrichedSection;
+import com.apple.springboot.model.QueryInterpretation;
 import com.apple.springboot.repository.ConsolidatedEnrichedSectionRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -32,6 +33,7 @@ import java.util.stream.Collectors;
 public class ChatbotService {
     private final VectorSearchService vectorSearchService;
     private final ConsolidatedEnrichedSectionRepository consolidatedRepo;
+    private final QueryInterpretationService queryInterpretationService;
 
     private static final Pattern SECTION_PATTERN = Pattern.compile("(?i)\\b([a-z0-9][a-z0-9\\s-]*section)\\b");
     private static final Pattern ROLE_PATTERN = Pattern.compile("(?i)\\bgive\\s+me\\s+([a-z0-9\\s-]+?)\\s+(?:for|of)\\b");
@@ -73,9 +75,11 @@ public class ChatbotService {
     private final Set<String> isoCountryCodes;
 
     public ChatbotService(VectorSearchService vectorSearchService,
-                          ConsolidatedEnrichedSectionRepository consolidatedRepo) {
+                          ConsolidatedEnrichedSectionRepository consolidatedRepo,
+                          QueryInterpretationService queryInterpretationService) {
         this.vectorSearchService = vectorSearchService;
         this.consolidatedRepo = consolidatedRepo;
+        this.queryInterpretationService = queryInterpretationService;
         this.languageIndex = buildLanguageIndex();
         this.isoLanguageCodes = buildIsoLanguageCodes();
         this.isoCountryCodes = buildIsoCountryCodes();
@@ -84,24 +88,52 @@ public class ChatbotService {
     }
 
     public List<ChatbotResultDto> query(ChatbotRequest request) {
-        SearchCriteria criteria = buildCriteria(request);
+        String userMessage = request != null ? request.getMessage() : null;
+        Map<String, Object> requestContext = request != null ? request.getContext() : null;
+
+        QueryInterpretation interpretation = queryInterpretationService
+                .interpret(userMessage, requestContext)
+                .orElse(null);
+
+        SearchCriteria criteria = buildCriteria(request, interpretation);
         if (!StringUtils.hasText(criteria.sectionKey())) {
             return List.of();
         }
 
+        LinkedHashSet<String> tagSet = new LinkedHashSet<>();
+        LinkedHashSet<String> keywordSet = new LinkedHashSet<>();
+        if (interpretation != null) {
+            addNormalizedStrings(tagSet, interpretation.tags());
+            addNormalizedStrings(keywordSet, interpretation.keywords());
+        }
+        if (request != null) {
+            addNormalizedStrings(tagSet, request.getTags());
+            addNormalizedStrings(keywordSet, request.getKeywords());
+        }
+        List<String> tagFilters = List.copyOf(tagSet);
+        List<String> keywordFilters = List.copyOf(keywordSet);
+
+        Map<String, Object> interpretationContext = interpretation != null && !interpretation.context().isEmpty()
+                ? new LinkedHashMap<>(interpretation.context())
+                : Collections.emptyMap();
+
         int limit = determineLimit(request);
 
         Map<String, Object> derivedContext = buildDerivedContext(criteria);
+        Map<String, Object> combinedContext = mergeContext(
+                requestContext,
+                interpretationContext
+        );
         Map<String, Object> effectiveContext = mergeContext(
-                request != null ? request.getContext() : null,
+                combinedContext,
                 derivedContext
         );
 
-        List<ChatbotResultDto> vectorResults = fetchVectorResults(request, criteria, effectiveContext, limit);
+        List<ChatbotResultDto> vectorResults = fetchVectorResults(criteria, effectiveContext, limit, tagFilters, keywordFilters);
         List<ChatbotResultDto> consolidatedResults = fetchConsolidatedResults(criteria, limit);
 
         List<ChatbotResultDto> combined = mergeResults(vectorResults, consolidatedResults, limit);
-        assignCfIds(combined, criteria, request);
+        assignCfIds(combined, criteria, tagFilters, keywordFilters);
 
         return combined;
     }
@@ -113,10 +145,11 @@ public class ChatbotService {
         return Math.min(request.getLimit(), 200);
     }
 
-    private List<ChatbotResultDto> fetchVectorResults(ChatbotRequest request,
-                                                      SearchCriteria criteria,
+    private List<ChatbotResultDto> fetchVectorResults(SearchCriteria criteria,
                                                       Map<String, Object> context,
-                                                      int limit) {
+                                                      int limit,
+                                                      List<String> tags,
+                                                      List<String> keywords) {
         if (!StringUtils.hasText(criteria.embeddingQuery())) {
             return List.of();
         }
@@ -125,8 +158,8 @@ public class ChatbotService {
                     criteria.embeddingQuery(),
                     null,
                     limit,
-                    request != null ? request.getTags() : null,
-                    request != null ? request.getKeywords() : null,
+                    tags == null || tags.isEmpty() ? null : tags,
+                    keywords == null || keywords.isEmpty() ? null : keywords,
                     context.isEmpty() ? null : context,
                     null,
                     criteria.sectionKey()
@@ -213,7 +246,8 @@ public class ChatbotService {
 
     private void assignCfIds(List<ChatbotResultDto> results,
                              SearchCriteria criteria,
-                             ChatbotRequest request) {
+                             List<String> tags,
+                             List<String> keywords) {
         if (results == null) {
             return;
         }
@@ -246,13 +280,14 @@ public class ChatbotService {
                 dto.setTenant("applecom-cms");
             }
 
-            dto.setMatchTerms(buildMatchTerms(dto, criteria, request));
+            dto.setMatchTerms(buildMatchTerms(dto, criteria, tags, keywords));
         }
     }
 
     private List<String> buildMatchTerms(ChatbotResultDto dto,
                                          SearchCriteria criteria,
-                                         ChatbotRequest request) {
+                                         List<String> tags,
+                                         List<String> keywords) {
         LinkedHashSet<String> terms = new LinkedHashSet<>();
         addTerm(terms, criteria.sectionKey());
         addTerm(terms, dto.getContentRole());
@@ -262,11 +297,11 @@ public class ChatbotService {
         addTerm(terms, criteria.country());
         addTerm(terms, criteria.language());
 
-        if (request != null && request.getTags() != null) {
-            terms.addAll(request.getTags());
+        if (tags != null) {
+            terms.addAll(tags);
         }
-        if (request != null && request.getKeywords() != null) {
-            terms.addAll(request.getKeywords());
+        if (keywords != null) {
+            terms.addAll(keywords);
         }
         return new ArrayList<>(terms);
     }
@@ -276,6 +311,17 @@ public class ChatbotService {
             return;
         }
         terms.add(value);
+    }
+
+    private void addNormalizedStrings(Set<String> target, List<String> values) {
+        if (target == null || values == null) {
+            return;
+        }
+        for (String value : values) {
+            if (StringUtils.hasText(value)) {
+                target.add(value.trim().toLowerCase(Locale.ROOT));
+            }
+        }
     }
 
     private boolean matchesCriteria(ChatbotResultDto dto, SearchCriteria criteria) {
@@ -475,26 +521,37 @@ public class ChatbotService {
         return null;
     }
 
-    private SearchCriteria buildCriteria(ChatbotRequest request) {
-        String message = request != null ? request.getMessage() : null;
+    private SearchCriteria buildCriteria(ChatbotRequest request, QueryInterpretation interpretation) {
+        String originalMessage = request != null ? request.getMessage() : null;
+        String interpretedQuery = interpretation != null ? interpretation.rawQuery() : null;
+        String message = StringUtils.hasText(interpretedQuery) ? interpretedQuery : originalMessage;
 
         SearchCriteriaBuilder builder = new SearchCriteriaBuilder()
                 .message(message);
 
-        String sectionKey = slugify(request != null ? request.getSectionKey() : null);
-        String inferredSection = extractSectionKey(message);
-        builder.sectionKey(firstNonBlank(sectionKey, inferredSection));
+        String interpretedSectionKey = normalizeKey(interpretation != null ? interpretation.sectionKey() : null);
+        String requestSectionKey = slugify(request != null ? request.getSectionKey() : null);
+        String inferredSection = extractSectionKey(originalMessage);
+        builder.sectionKey(firstNonBlank(interpretedSectionKey, requestSectionKey, inferredSection));
 
+        String interpretedRole = normalizeRole(interpretation != null ? interpretation.role() : null);
         String explicitRole = normalizeRole(request != null ? request.getOriginal_field_name() : null);
-        String inferredRole = extractRole(message);
-        builder.role(firstNonBlank(explicitRole, inferredRole));
+        String inferredRole = extractRole(originalMessage);
+        builder.role(firstNonBlank(interpretedRole, explicitRole, inferredRole));
 
-        LocaleHints localeHints = parseLocaleHints(message);
-        builder.locale(firstOf(localeHints.locales()));
-        builder.language(firstOf(localeHints.languages()));
-        builder.country(firstOf(localeHints.countries()));
+        LocaleHints localeHints = parseLocaleHints(originalMessage);
+        String interpretedLocale = normalizeLocale(interpretation != null ? interpretation.locale() : null);
+        String interpretedLanguage = normalizeLanguageToken(interpretation != null ? interpretation.language() : null);
+        String interpretedCountry = mapCountryCode(interpretation != null ? interpretation.country() : null);
 
-        builder.pageId(extractPageId(message, localeHints));
+        builder.locale(firstNonBlank(interpretedLocale, firstOf(localeHints.locales())));
+        builder.language(firstNonBlank(interpretedLanguage, firstOf(localeHints.languages())));
+        builder.country(firstNonBlank(interpretedCountry, firstOf(localeHints.countries())));
+
+        builder.pageId(firstNonBlank(
+                normalizePageId(interpretation != null ? interpretation.pageId() : null),
+                extractPageId(originalMessage, localeHints)
+        ));
 
         if (request != null && request.getContext() != null) {
             Map<String, Object> context = request.getContext();
@@ -855,7 +912,16 @@ public class ChatbotService {
         if (!StringUtils.hasText(value)) {
             return null;
         }
-        return normalizeLanguageToken(value);
+        String trimmed = value.trim();
+        int separator = Math.max(trimmed.lastIndexOf('_'), trimmed.lastIndexOf('-'));
+        if (separator > 0 && separator + 1 < trimmed.length()) {
+            String prefix = trimmed.substring(0, separator);
+            String candidate = normalizeLanguageToken(prefix);
+            if (candidate != null) {
+                return candidate;
+            }
+        }
+        return normalizeLanguageToken(trimmed);
     }
 
     private String mapCountryAlias(String value) {
@@ -1060,6 +1126,14 @@ public class ChatbotService {
             return null;
         }
         String trimmed = value.trim();
+        int separator = Math.max(trimmed.lastIndexOf('_'), trimmed.lastIndexOf('-'));
+        if (separator > 0 && separator + 1 < trimmed.length()) {
+            String suffix = trimmed.substring(separator + 1);
+            String mappedSuffix = mapCountryCode(suffix);
+            if (mappedSuffix != null) {
+                return mappedSuffix;
+            }
+        }
         String sanitized = sanitizeCountryKey(trimmed);
         if (!StringUtils.hasText(sanitized)) {
             return null;
