@@ -124,9 +124,24 @@ public class ChatbotService {
         if (combined.isEmpty() && StringUtils.hasText(criteria.role())) {
             SearchCriteria relaxed = criteria.withoutRole();
             if (!relaxed.equals(criteria)) {
-                combined = runSearch(relaxed, requestContext, interpretationContext, tagFilters, keywordFilters, limit);
-                if (!combined.isEmpty()) {
+                List<ChatbotResultDto> retry = runSearch(relaxed, requestContext, interpretationContext, tagFilters, keywordFilters, limit);
+                if (!retry.isEmpty()) {
+                    combined = retry;
                     criteria = relaxed;
+                }
+            }
+        }
+
+        if (combined.isEmpty()) {
+            SearchCriteria relaxedContext = criteria.withoutContext();
+            boolean needsContextRelaxation = !relaxedContext.equals(criteria)
+                    || (requestContext != null && !requestContext.isEmpty())
+                    || (interpretationContext != null && !interpretationContext.isEmpty());
+            if (needsContextRelaxation) {
+                List<ChatbotResultDto> retry = runSearch(relaxedContext, Collections.emptyMap(), Collections.emptyMap(), tagFilters, keywordFilters, limit);
+                if (!retry.isEmpty()) {
+                    combined = retry;
+                    criteria = relaxedContext;
                 }
             }
         }
@@ -1259,6 +1274,16 @@ public class ChatbotService {
                 return this;
             }
             return new SearchCriteria(sectionKey, null, locale, language, country, pageId, message);
+        }
+
+        SearchCriteria withoutContext() {
+            if ((locale == null || locale.isBlank())
+                    && (language == null || language.isBlank())
+                    && (country == null || country.isBlank())
+                    && (pageId == null || pageId.isBlank())) {
+                return this;
+            }
+            return new SearchCriteria(sectionKey, role, null, null, null, null, message);
         }
     }
 
