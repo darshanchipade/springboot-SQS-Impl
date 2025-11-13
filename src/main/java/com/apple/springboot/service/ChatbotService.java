@@ -90,7 +90,8 @@ public class ChatbotService {
 
     public List<ChatbotResultDto> query(ChatbotRequest request) {
         String userMessage = request != null ? request.getMessage() : null;
-        Map<String, Object> requestContext = request != null ? request.getContext() : null;
+        Map<String, Object> rawRequestContext = request != null ? request.getContext() : null;
+        Map<String, Object> requestContext = sanitizeContext(rawRequestContext);
 
         QueryInterpretation interpretation = queryInterpretationService
                 .interpret(userMessage, requestContext)
@@ -114,9 +115,7 @@ public class ChatbotService {
         List<String> tagFilters = new ArrayList<>(tagSet);
         List<String> keywordFilters = new ArrayList<>(keywordSet);
 
-        Map<String, Object> interpretationContext = interpretation != null && !interpretation.context().isEmpty()
-                ? new LinkedHashMap<>(interpretation.context())
-                : Collections.emptyMap();
+        Map<String, Object> interpretationContext = sanitizeContext(interpretation != null ? interpretation.context() : null);
 
         int limit = determineLimit(request);
 
@@ -125,9 +124,11 @@ public class ChatbotService {
                 requestContext,
                 interpretationContext
         );
-        Map<String, Object> effectiveContext = mergeContext(
-                combinedContext,
-                derivedContext
+        Map<String, Object> effectiveContext = sanitizeContext(
+                mergeContext(
+                        combinedContext,
+                        derivedContext
+                )
         );
 
         List<ChatbotResultDto> vectorResults = fetchVectorResults(criteria, effectiveContext, limit, tagFilters, keywordFilters);
