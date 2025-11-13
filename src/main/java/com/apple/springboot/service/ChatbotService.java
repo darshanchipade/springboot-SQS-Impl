@@ -8,17 +8,17 @@ import com.apple.springboot.repository.ConsolidatedEnrichedSectionRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Matcher;
@@ -30,21 +30,47 @@ public class ChatbotService {
     private final VectorSearchService vectorSearchService;
     private final ConsolidatedEnrichedSectionRepository consolidatedRepo;
 
-    private static final Pattern SECTION_KEY_PATTERN =
-            Pattern.compile("(?i)\\b([a-z0-9]+(?:-[a-z0-9]+)*)-section(?:-[a-z0-9]+)*\\b");
-    private static final Pattern LOCALE_PATTERN =
-            Pattern.compile("(?i)\\b([a-z]{2})[-_]([a-z]{2})\\b");
-    private static final Set<String> ISO_LANGUAGE_CODES = Collections.unmodifiableSet(
-            Arrays.stream(Locale.getISOLanguages())
-                    .map(code -> code.toLowerCase(Locale.ROOT))
-                    .collect(Collectors.toSet())
+    private static final Pattern SECTION_PATTERN = Pattern.compile("(?i)\\b([a-z0-9][a-z0-9\\s-]*section)\\b");
+    private static final Pattern ROLE_PATTERN = Pattern.compile("(?i)\\bgive\\s+me\\s+([a-z0-9\\s-]+?)\\s+(?:for|of)\\b");
+    private static final Pattern MESSAGE_LOCALE_PATTERN = Pattern.compile("(?i)\\b([a-z]{2})[_-]([a-z]{2})\\b");
+    private static final Pattern NORMALIZE_LOCALE_PATTERN = Pattern.compile("(?i)^([a-z]{2})[_-]([a-z]{2})$");
+
+    private static final Set<String> KNOWN_PAGE_IDS = Set.of("ipad", "iphone", "watch", "mac", "macbook", "airpods");
+    private static final Pattern PAGE_ID_PATTERN = Pattern.compile("(?i)\\b(" + String.join("|", KNOWN_PAGE_IDS) + ")\\b");
+
+    private static final Set<String> KNOWN_ROLE_KEYWORDS = Set.of("headline", "title", "copy", "body", "content", "description");
+
+    private static final Map<String, String> LANGUAGE_ALIASES = Map.of(
+            "english", "en",
+            "spanish", "es",
+            "french", "fr",
+            "german", "de",
+            "japanese", "ja",
+            "korean", "ko",
+            "chinese", "zh"
     );
-    private static final Set<String> ISO_COUNTRY_CODES = Collections.unmodifiableSet(
-            Arrays.stream(Locale.getISOCountries())
-                    .map(code -> code.toUpperCase(Locale.ROOT))
-                    .collect(Collectors.toSet())
+
+    private static final List<String> COUNTRY_PHRASES = List.of(
+            "united states of america",
+            "united states",
+            "united kingdom"
     );
-    private static final Map<String, String> COUNTRY_NAME_INDEX = buildCountryNameIndex();
+
+    private static final Map<String, String> COUNTRY_TOKEN_TO_CODE;
+
+    static {
+        Map<String, String> tokens = new HashMap<>();
+        tokens.put("us", "US");
+        tokens.put("usa", "US");
+        tokens.put("u.s", "US");
+        tokens.put("u.s.a", "US");
+        tokens.put("unitedstates", "US");
+        tokens.put("unitedstatesofamerica", "US");
+        tokens.put("america", "US");
+        tokens.put("uk", "GB");
+        tokens.put("unitedkingdom", "GB");
+        COUNTRY_TOKEN_TO_CODE = Collections.unmodifiableMap(tokens);
+    }
 
     public ChatbotService(VectorSearchService vectorSearchService,
                           ConsolidatedEnrichedSectionRepository consolidatedRepo) {
@@ -53,1252 +79,811 @@ public class ChatbotService {
     }
 
     public List<ChatbotResultDto> query(ChatbotRequest request) {
-        String key = request != null ? normalizeKey(request.getSectionKey()) : null;
-        if (!StringUtils.hasText(key)) {
-            key = extractKey(request != null ? request.getMessage() : null);
-        }
-        if (!StringUtils.hasText(key)) {
+        SearchCriteria criteria = buildCriteria(request);
+        if (!StringUtils.hasText(criteria.sectionKey())) {
             return List.of();
         }
 
-        int limit = (request != null && request.getLimit() != null && request.getLimit() > 0)
-                ? Math.min(request.getLimit(), 200)
-                : 15;
+        int limit = determineLimit(request);
 
-        String message = request != null ? request.getMessage() : null;
+        Map<String, Object> derivedContext = buildDerivedContext(criteria);
+        Map<String, Object> effectiveContext = mergeContext(
+                request != null ? request.getContext() : null,
+                derivedContext
+        );
 
-        LocaleCriteria localeCriteria = extractLocaleCriteria(message);
-        if (request != null && request.getContext() != null) {
-            enrichCriteriaFromContext(localeCriteria, request.getContext());
+        List<ChatbotResultDto> vectorResults = fetchVectorResults(request, criteria, effectiveContext, limit);
+        List<ChatbotResultDto> consolidatedResults = fetchConsolidatedResults(criteria, limit);
+
+        List<ChatbotResultDto> combined = mergeResults(vectorResults, consolidatedResults, limit);
+        assignCfIds(combined, criteria, request);
+
+        return combined;
+    }
+
+    private int determineLimit(ChatbotRequest request) {
+        if (request == null || request.getLimit() == null || request.getLimit() <= 0) {
+            return 15;
         }
+        return Math.min(request.getLimit(), 200);
+    }
 
-        boolean explicitRole = request != null && StringUtils.hasText(request.getOriginal_field_name());
-        String roleHint = explicitRole ? request.getOriginal_field_name().trim().toLowerCase(Locale.ROOT) : null;
-        boolean inferredRole = false;
-        if (!explicitRole && userExplicitlyRequestedRole(message, key)) {
-            String inferred = inferRoleHint(message, key);
-            if (StringUtils.hasText(inferred)) {
-                roleHint = inferred.trim().toLowerCase(Locale.ROOT);
-                inferredRole = true;
-            }
+    private List<ChatbotResultDto> fetchVectorResults(ChatbotRequest request,
+                                                      SearchCriteria criteria,
+                                                      Map<String, Object> context,
+                                                      int limit) {
+        if (!StringUtils.hasText(criteria.embeddingQuery())) {
+            return List.of();
         }
-        int vectorPreLimit = StringUtils.hasText(roleHint) ? Math.min(limit * 3, 100) : limit;
-
         try {
-            String embeddingQuery = StringUtils.hasText(message) ? message : key;
-
-            Map<String, Object> localeContext = buildLocaleContext(localeCriteria);
-            Map<String, Object> effectiveContext = mergeContextFilters(
-                    request != null ? request.getContext() : null,
-                    localeContext
-            );
-
-            // Vector: do NOT hard-filter by original_field_name to allow partial queries
-            List<ContentChunkWithDistance> results = vectorSearchService.search(
-                    embeddingQuery,
-                    null, // avoid strict equality in SQL for partial role queries
-                    vectorPreLimit,
+            List<ContentChunkWithDistance> rows = vectorSearchService.search(
+                    criteria.embeddingQuery(),
+                    criteria.role(),
+                    limit,
                     request != null ? request.getTags() : null,
                     request != null ? request.getKeywords() : null,
-                    effectiveContext.isEmpty() ? null : effectiveContext,
-                    null // threshold
+                    context.isEmpty() ? null : context,
+                    null,
+                    criteria.sectionKey()
             );
 
-            final String sectionKeyFinal = key;
-            final Set<String> sectionKeyVariants = StringUtils.hasText(sectionKeyFinal)
-                    ? new LinkedHashSet<>(buildSectionKeyVariants(sectionKeyFinal))
-                    : Collections.emptySet();
-
-            List<ChatbotResultDto> vectorDtos = new ArrayList<>();
-            for (ContentChunkWithDistance result : results) {
-                var section = result.getContentChunk().getConsolidatedEnrichedSection();
-                if (!sectionKeyVariants.isEmpty() && !matchesSectionKey(section, sectionKeyVariants)) {
-                    continue;
-                }
-                ChatbotResultDto dto = new ChatbotResultDto();
-                dto.setSection(sectionKeyFinal);
-                dto.setSectionPath(section.getSectionPath());
-                dto.setSectionUri(section.getSectionUri());
-                dto.setCleansedText(section.getCleansedText());
-                dto.setSource("content_chunks");
-                dto.setContentRole(section.getOriginalFieldName());
-                dto.setLastModified(section.getSavedAt() != null ? section.getSavedAt().toString() : null);
-                dto.setMatchTerms(List.of(sectionKeyFinal));
-
-                LocaleTriple localeInfo = resolveLocaleInfo(section, localeCriteria);
-                dto.setLocale(localeInfo.locale());
-                dto.setLanguage(localeInfo.language());
-                dto.setCountry(localeInfo.country());
-
-                dto.setTenant(extractTenant(section));
-                dto.setPageId(extractPageId(section));
-                vectorDtos.add(dto);
-            }
-
-            vectorDtos = applyCriteriaFilter(vectorDtos, localeCriteria);
-
-            // Consolidated search: prioritise explicit section-key matches, fallback to metadata query
-            List<ConsolidatedEnrichedSection> consolidatedMatches = new ArrayList<>();
-            if (StringUtils.hasText(sectionKeyFinal)) {
-                LinkedHashMap<UUID, ConsolidatedEnrichedSection> agg = new LinkedHashMap<>();
-                addSectionRows(agg, consolidatedRepo.findBySectionKey(
-                        sectionKeyFinal,
-                        Math.max(limit * 4, 2000)));
-                addSectionRows(agg, consolidatedRepo.findByContextSectionKey(
-                        sectionKeyFinal,
-                        Math.max(limit * 4, 2000)));
-
-                for (String variant : buildSectionKeyVariants(sectionKeyFinal)) {
-                    addSectionRows(agg, consolidatedRepo.findBySectionKey(
-                            variant,
-                            Math.max(limit * 4, 2000)));
-                }
-
-                if (!agg.isEmpty()) {
-                    consolidatedMatches = new ArrayList<>(agg.values());
-                }
-            }
-
-            if (consolidatedMatches.isEmpty()) {
-                if (StringUtils.hasText(message)) {
-                    consolidatedMatches = consolidatedRepo.findByMetadataQuery(message, Math.max(limit * 2, 50));
-                } else if (StringUtils.hasText(sectionKeyFinal)) {
-                    consolidatedMatches = consolidatedRepo.findBySectionKey(sectionKeyFinal, Math.max(limit * 2, 50));
-                }
-            }
-
-            if (!sectionKeyVariants.isEmpty() && !consolidatedMatches.isEmpty()) {
-                consolidatedMatches = consolidatedMatches.stream()
-                        .filter(section -> matchesSectionKey(section, sectionKeyVariants))
-                        .collect(Collectors.toList());
-            }
-
-            boolean applyRoleFilter = false;
-            if (explicitRole && StringUtils.hasText(roleHint)) {
-                applyRoleFilter = true;
-            } else if (inferredRole && StringUtils.hasText(roleHint)) {
-                if (roleExists(roleHint, vectorDtos, consolidatedMatches)) {
-                    applyRoleFilter = true;
-                } else {
-                    roleHint = null;
-                }
-            }
-
-            if (applyRoleFilter && StringUtils.hasText(roleHint)) {
-                final String roleFilter = roleHint.toLowerCase(Locale.ROOT);
-                vectorDtos = vectorDtos.stream()
-                        .filter(d -> d.getContentRole() != null && d.getContentRole().toLowerCase(Locale.ROOT).contains(roleFilter))
-                        .collect(Collectors.toList());
-                consolidatedMatches = consolidatedMatches.stream()
-                        .filter(s -> s.getOriginalFieldName() != null
-                                && s.getOriginalFieldName().toLowerCase(Locale.ROOT).contains(roleFilter))
-                        .collect(Collectors.toList());
-            }
-
-            List<ChatbotResultDto> consolidatedDtos = consolidatedMatches.stream()
-                    .map(section -> {
-                        ChatbotResultDto dto = new ChatbotResultDto();
-                        dto.setSection(sectionKeyFinal);
-                        dto.setSectionPath(section.getSectionPath());
-                        dto.setSectionUri(section.getSectionUri());
-                        dto.setCleansedText(section.getCleansedText());
-                        dto.setSource("consolidated_enriched_sections");
-                        dto.setContentRole(section.getOriginalFieldName());
-                        dto.setLastModified(section.getSavedAt() != null ? section.getSavedAt().toString() : null);
-                        dto.setMatchTerms(List.of(sectionKeyFinal));
-
-                        LocaleTriple localeInfo = resolveLocaleInfo(section, localeCriteria);
-                        dto.setLocale(localeInfo.locale());
-                        dto.setLanguage(localeInfo.language());
-                        dto.setCountry(localeInfo.country());
-
-                        dto.setTenant(extractTenant(section));
-                        dto.setPageId(extractPageId(section));
-                        return dto;
-                    })
-                    .collect(Collectors.toList());
-
-            consolidatedDtos = applyCriteriaFilter(consolidatedDtos, localeCriteria);
-
-            // Merge vector-first, then consolidated; dedupe by section_path + content_role
-            LinkedHashMap<String, ChatbotResultDto> merged = new LinkedHashMap<>();
-            for (ChatbotResultDto d : vectorDtos) {
-                String dedupKey = (d.getSectionPath() == null ? "" : d.getSectionPath())
-                        + "|" + (d.getContentRole() == null ? "" : d.getContentRole());
-                merged.putIfAbsent(dedupKey, d);
-            }
-            for (ChatbotResultDto d : consolidatedDtos) {
-                String dedupKey = (d.getSectionPath() == null ? "" : d.getSectionPath())
-                        + "|" + (d.getContentRole() == null ? "" : d.getContentRole());
-                merged.putIfAbsent(dedupKey, d);
-            }
-
-            List<ChatbotResultDto> mergedList = finalizeResults(new ArrayList<>(merged.values()),
-                    localeCriteria, request, sectionKeyFinal, roleHint, applyRoleFilter, limit);
-
-            if (mergedList.isEmpty() && StringUtils.hasText(sectionKeyFinal)) {
-                LinkedHashMap<UUID, ConsolidatedEnrichedSection> fallbackAgg = new LinkedHashMap<>();
-                addSectionRows(fallbackAgg, consolidatedRepo.findBySectionKey(
-                        sectionKeyFinal,
-                        Math.max(limit * 4, 2000)));
-                addSectionRows(fallbackAgg, consolidatedRepo.findByContextSectionKey(
-                        sectionKeyFinal,
-                        Math.max(limit * 4, 2000)));
-                List<ConsolidatedEnrichedSection> fallbackRows = new ArrayList<>(fallbackAgg.values());
-                if (fallbackRows.isEmpty()) {
-                    fallbackRows = consolidatedRepo.findByMetadataQuery(sectionKeyFinal, Math.max(limit * 2, 50));
-                }
-                if (!sectionKeyVariants.isEmpty()) {
-                    fallbackRows = fallbackRows.stream()
-                            .filter(section -> matchesSectionKey(section, sectionKeyVariants))
-                            .collect(Collectors.toList());
-                }
-                if (applyRoleFilter && StringUtils.hasText(roleHint)) {
-                    final String roleFilter = roleHint.toLowerCase(Locale.ROOT);
-                    fallbackRows = fallbackRows.stream()
-                            .filter(s -> s.getOriginalFieldName() != null
-                                    && s.getOriginalFieldName().toLowerCase(Locale.ROOT).contains(roleFilter))
-                            .collect(Collectors.toList());
-                }
-
-                List<ChatbotResultDto> fallbackDtos = fallbackRows.stream()
-                        .map(section -> {
-                            ChatbotResultDto dto = new ChatbotResultDto();
-                            dto.setSection(sectionKeyFinal);
-                            dto.setSectionPath(section.getSectionPath());
-                            dto.setSectionUri(section.getSectionUri());
-                            dto.setCleansedText(section.getCleansedText());
-                            dto.setSource("consolidated_enriched_sections");
-                            dto.setContentRole(section.getOriginalFieldName());
-                            dto.setLastModified(section.getSavedAt() != null ? section.getSavedAt().toString() : null);
-                            dto.setMatchTerms(List.of(sectionKeyFinal));
-
-                            LocaleTriple localeInfo = resolveLocaleInfo(section, localeCriteria);
-                            dto.setLocale(localeInfo.locale());
-                            dto.setLanguage(localeInfo.language());
-                            dto.setCountry(localeInfo.country());
-
-                            dto.setTenant(extractTenant(section));
-                            dto.setPageId(extractPageId(section));
-                            return dto;
-                        })
-                        .collect(Collectors.toList());
-
-                fallbackDtos = applyCriteriaFilter(fallbackDtos, localeCriteria);
-                mergedList = finalizeResults(fallbackDtos, localeCriteria, request, sectionKeyFinal, roleHint, applyRoleFilter, limit);
-            }
-
-            return mergedList;
-        } catch (Exception e) {
+            return rows.stream()
+                    .map(row -> mapSection(row.getContentChunk().getConsolidatedEnrichedSection(), "content_chunks"))
+                    .filter(Objects::nonNull)
+                    .filter(dto -> matchesCriteria(dto, criteria))
+                    .collect(Collectors.toCollection(ArrayList::new));
+        } catch (Exception ex) {
             return List.of();
         }
     }
 
-    private boolean matchesSectionKey(ConsolidatedEnrichedSection section, Set<String> variants) {
-        if (section == null || variants == null || variants.isEmpty()) {
-            return true;
-        }
-        String original = normalizeKey(section.getOriginalFieldName());
-        String path = section.getSectionPath() != null ? section.getSectionPath().toLowerCase(Locale.ROOT) : null;
-        String uri = section.getSectionUri() != null ? section.getSectionUri().toLowerCase(Locale.ROOT) : null;
-        List<String> contextKeys = extractContextSectionKeyValues(section);
+    private List<ChatbotResultDto> fetchConsolidatedResults(SearchCriteria criteria, int limit) {
+        try {
+            LinkedHashMap<UUID, ConsolidatedEnrichedSection> collected = new LinkedHashMap<>();
 
-        for (String variant : variants) {
-            if (!StringUtils.hasText(variant)) {
-                continue;
+            if (StringUtils.hasText(criteria.sectionKey())) {
+                collectRows(collected, consolidatedRepo.findBySectionKey(criteria.sectionKey(), limit * 2));
+                collectRows(collected, consolidatedRepo.findByContextSectionKey(criteria.sectionKey(), limit * 2));
             }
-            String needle = variant.toLowerCase(Locale.ROOT);
-            if (StringUtils.hasText(original) && (original.equals(needle) || original.contains(needle))) {
-                return true;
-            }
-            if (path != null && path.contains(needle)) {
-                return true;
-            }
-            if (uri != null && uri.contains(needle)) {
-                return true;
-            }
-            for (String ctx : contextKeys) {
-                if (ctx.contains(needle)) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
 
-    private List<String> extractContextSectionKeyValues(ConsolidatedEnrichedSection section) {
-        if (section == null || section.getContext() == null) {
+            List<ConsolidatedEnrichedSection> rows = new ArrayList<>(collected.values());
+            if (rows.isEmpty() && StringUtils.hasText(criteria.message())) {
+                rows = consolidatedRepo.findByMetadataQuery(criteria.message(), limit * 2);
+            }
+
+            return rows.stream()
+                    .map(section -> mapSection(section, "consolidated_enriched_sections"))
+                    .filter(Objects::nonNull)
+                    .filter(dto -> matchesCriteria(dto, criteria))
+                    .collect(Collectors.toCollection(ArrayList::new));
+        } catch (Exception ex) {
             return List.of();
         }
-        List<String> values = new ArrayList<>();
-        collectContextStrings(section.getContext().get("sectionKey"), values);
-
-        Object facets = section.getContext().get("facets");
-        if (facets instanceof Map<?, ?> facetsMap) {
-            collectContextStrings(facetsMap.get("sectionKey"), values);
-        }
-
-        Object envelope = section.getContext().get("envelope");
-        if (envelope instanceof Map<?, ?> envelopeMap) {
-            collectContextStrings(envelopeMap.get("sectionKey"), values);
-            collectContextStrings(envelopeMap.get("usagePath"), values);
-        }
-
-        return values.stream()
-                .filter(StringUtils::hasText)
-                .map(str -> str.trim().toLowerCase(Locale.ROOT))
-                .collect(Collectors.toList());
     }
 
-    private void collectContextStrings(Object value, List<String> target) {
-        if (value == null || target == null) {
+    private void collectRows(Map<UUID, ConsolidatedEnrichedSection> target,
+                             List<ConsolidatedEnrichedSection> rows) {
+        if (target == null || rows == null) {
             return;
         }
-        if (value instanceof String str) {
-            target.add(str);
-        } else if (value instanceof Collection<?> collection) {
-            for (Object item : collection) {
-                if (item instanceof String strItem) {
-                    target.add(strItem);
-                }
+        for (ConsolidatedEnrichedSection row : rows) {
+            if (row != null && row.getId() != null) {
+                target.putIfAbsent(row.getId(), row);
             }
         }
     }
 
-    private String extractKey(String message) {
-        if (!StringUtils.hasText(message)) {
-            return null;
-        }
-        Matcher m = SECTION_KEY_PATTERN.matcher(message);
-        if (m.find()) {
-            return normalizeKey(m.group(0));
-        }
+    private List<ChatbotResultDto> mergeResults(List<ChatbotResultDto> vector,
+                                                List<ChatbotResultDto> consolidated,
+                                                int limit) {
+        LinkedHashMap<String, ChatbotResultDto> deduped = new LinkedHashMap<>();
+        addResults(deduped, vector);
+        addResults(deduped, consolidated);
+        return deduped.values()
+                .stream()
+                .limit(limit)
+                .collect(Collectors.toCollection(ArrayList::new));
+    }
 
-        String[] tokens = message.split("\\s+");
-
-        for (String raw : tokens) {
-            String token = sanitizeToken(raw);
-            if (!StringUtils.hasText(token)) {
+    private void addResults(LinkedHashMap<String, ChatbotResultDto> target, List<ChatbotResultDto> source) {
+        if (target == null || source == null) {
+            return;
+        }
+        for (ChatbotResultDto dto : source) {
+            if (dto == null) {
                 continue;
             }
-            long hyphenCount = token.chars().filter(ch -> ch == '-').count();
-            if (hyphenCount >= 2) {
-                return normalizeKey(token);
-            }
+            String key = (dto.getSectionPath() != null ? dto.getSectionPath() : "")
+                    + "|" + (dto.getContentRole() != null ? dto.getContentRole() : "");
+            target.putIfAbsent(key, dto);
         }
-
-        for (String raw : tokens) {
-            String candidate = maybeSectionKeyFromToken(raw);
-            if (StringUtils.hasText(candidate)) {
-                return normalizeKey(candidate);
-            }
-        }
-
-        return null;
     }
 
-    private String sanitizeToken(String token) {
-        if (!StringUtils.hasText(token)) {
+    private void assignCfIds(List<ChatbotResultDto> results,
+                             SearchCriteria criteria,
+                             ChatbotRequest request) {
+        if (results == null) {
+            return;
+        }
+        for (int i = 0; i < results.size(); i++) {
+            ChatbotResultDto dto = results.get(i);
+            if (dto == null) {
+                continue;
+            }
+            dto.setCfId("cf" + (i + 1));
+
+            if (!StringUtils.hasText(dto.getSection())) {
+                dto.setSection(criteria.sectionKey());
+            }
+            if (!StringUtils.hasText(dto.getLocale()) && StringUtils.hasText(criteria.locale())) {
+                dto.setLocale(criteria.locale());
+            }
+            if (!StringUtils.hasText(dto.getCountry()) && StringUtils.hasText(criteria.country())) {
+                dto.setCountry(criteria.country());
+            }
+            if (!StringUtils.hasText(dto.getLanguage()) && StringUtils.hasText(criteria.language())) {
+                dto.setLanguage(criteria.language());
+            }
+            if (!StringUtils.hasText(dto.getPageId()) && StringUtils.hasText(criteria.pageId())) {
+                dto.setPageId(criteria.pageId());
+            }
+            if (!StringUtils.hasText(dto.getContentRole()) && StringUtils.hasText(criteria.role())) {
+                dto.setContentRole(criteria.role());
+            }
+            if (!StringUtils.hasText(dto.getTenant())) {
+                dto.setTenant("applecom-cms");
+            }
+
+            dto.setMatchTerms(buildMatchTerms(dto, criteria, request));
+        }
+    }
+
+    private List<String> buildMatchTerms(ChatbotResultDto dto,
+                                         SearchCriteria criteria,
+                                         ChatbotRequest request) {
+        LinkedHashSet<String> terms = new LinkedHashSet<>();
+        addTerm(terms, criteria.sectionKey());
+        addTerm(terms, dto.getContentRole());
+        addTerm(terms, criteria.role());
+        addTerm(terms, dto.getPageId());
+        addTerm(terms, criteria.pageId());
+        addTerm(terms, criteria.country());
+        addTerm(terms, criteria.language());
+
+        if (request != null && request.getTags() != null) {
+            terms.addAll(request.getTags());
+        }
+        if (request != null && request.getKeywords() != null) {
+            terms.addAll(request.getKeywords());
+        }
+        return new ArrayList<>(terms);
+    }
+
+    private void addTerm(Set<String> terms, String value) {
+        if (terms == null || !StringUtils.hasText(value)) {
+            return;
+        }
+        terms.add(value);
+    }
+
+    private boolean matchesCriteria(ChatbotResultDto dto, SearchCriteria criteria) {
+        if (dto == null) {
+            return false;
+        }
+        if (criteria == null) {
+            return true;
+        }
+        if (StringUtils.hasText(criteria.pageId())
+                && StringUtils.hasText(dto.getPageId())
+                && !dto.getPageId().equalsIgnoreCase(criteria.pageId())) {
+            return false;
+        }
+        if (StringUtils.hasText(criteria.country())
+                && StringUtils.hasText(dto.getCountry())
+                && !dto.getCountry().equalsIgnoreCase(criteria.country())) {
+            return false;
+        }
+        if (StringUtils.hasText(criteria.locale())
+                && StringUtils.hasText(dto.getLocale())
+                && !dto.getLocale().equalsIgnoreCase(criteria.locale())) {
+            return false;
+        }
+        return true;
+    }
+
+    private ChatbotResultDto mapSection(ConsolidatedEnrichedSection section, String source) {
+        if (section == null) {
             return null;
         }
-        String cleaned = token.trim()
-                .replaceAll("^[^A-Za-z0-9_-]+", "")
-                .replaceAll("[^A-Za-z0-9_-]+$", "")
-                .toLowerCase(Locale.ROOT);
-        return StringUtils.hasText(cleaned) ? cleaned : null;
+        ChatbotResultDto dto = new ChatbotResultDto();
+        dto.setSectionPath(section.getSectionPath());
+        dto.setSectionUri(section.getSectionUri());
+        dto.setCleansedText(section.getCleansedText());
+        dto.setContentRole(section.getOriginalFieldName());
+        dto.setSource(source);
+        dto.setLastModified(formatTimestamp(section.getSavedAt()));
+        dto.setTenant(resolveTenant(section));
+        dto.setPageId(resolvePageId(section));
+
+        String locale = resolveLocale(section);
+        dto.setLocale(locale);
+        dto.setLanguage(resolveLanguage(section, locale));
+        dto.setCountry(resolveCountry(section, locale));
+
+        return dto;
     }
 
-    private String maybeSectionKeyFromToken(String raw) {
-        String token = sanitizeToken(raw);
-        if (!StringUtils.hasText(token)) {
+    private String formatTimestamp(OffsetDateTime timestamp) {
+        return timestamp != null ? timestamp.toString() : null;
+    }
+
+    private String resolveTenant(ConsolidatedEnrichedSection section) {
+        String fromEnvelope = asStringFromContext(section, "envelope", "tenant");
+        if (StringUtils.hasText(fromEnvelope)) {
+            return fromEnvelope;
+        }
+        String direct = firstString(section != null && section.getContext() != null ? section.getContext().get("tenant") : null);
+        if (StringUtils.hasText(direct)) {
+            return direct;
+        }
+        String fromUri = extractTenantFromPath(section != null ? section.getSectionUri() : null);
+        if (!StringUtils.hasText(fromUri)) {
+            fromUri = extractTenantFromPath(section != null ? section.getSectionPath() : null);
+        }
+        return StringUtils.hasText(fromUri) ? fromUri : "applecom-cms";
+    }
+
+    private String resolvePageId(ConsolidatedEnrichedSection section) {
+        if (section == null) {
             return null;
         }
-        if (!token.contains("-")) {
-            return null;
-        }
-        if (LOCALE_PATTERN.matcher(token).matches()) {
-            return null;
-        }
-        if (!token.endsWith("-section")) {
-            token = token + "-section";
-        }
-        return token;
-    }
-
-    private String normalizeKey(String key) {
-        if (!StringUtils.hasText(key)) return null;
-        return key.trim().toLowerCase();
-    }
-
-    private String inferRoleHint(String text, String sectionKey) {
-        if (!StringUtils.hasText(text)) return null;
-        String t = text.toLowerCase(Locale.ROOT).trim();
-
-        String roleCandidate = null;
-        if (StringUtils.hasText(sectionKey)) {
-            String sk = Pattern.quote(sectionKey.toLowerCase(Locale.ROOT));
-            Matcher mFor = Pattern.compile("(?i)\\bgive\\s+me\\s+(.+?)\\s+(?:for|of)\\s+.*" + sk + "\\b").matcher(t);
-            if (mFor.find()) roleCandidate = mFor.group(1);
-            if (roleCandidate == null) {
-                Matcher mGeneric = Pattern.compile("(?i)\\b(.+?)\\s+(?:for|of)\\s+.*" + sk + "\\b").matcher(t);
-                if (mGeneric.find()) roleCandidate = mGeneric.group(1);
-            }
-        }
-        if (roleCandidate == null) {
-            Matcher mFor = Pattern.compile("(?i)\\bgive\\s+me\\s+(.+?)\\s+(?:for|of)\\s+").matcher(t);
-            if (mFor.find()) roleCandidate = mFor.group(1);
-            if (roleCandidate == null) {
-                Matcher mGeneric = Pattern.compile("(?i)\\b([a-z0-9_-]{3,})\\b\\s+(?:for|of)\\b").matcher(t);
-                if (mGeneric.find()) roleCandidate = mGeneric.group(1);
-            }
-        }
-
-        if (!StringUtils.hasText(roleCandidate)) return null;
-
-        List<String> tokens = Arrays.stream(roleCandidate.split("\\s+"))
-                .map(s -> s.replaceAll("[^a-z0-9_-]", ""))
-                .filter(StringUtils::hasText)
-                .collect(Collectors.toList());
-        if (tokens.isEmpty()) return null;
-
-        return tokens.get(tokens.size() - 1);
-    }
-
-    private boolean userExplicitlyRequestedRole(String text, String sectionKey) {
-        if (!StringUtils.hasText(text)) return false;
-        String t = text.toLowerCase(Locale.ROOT);
-        if (StringUtils.hasText(sectionKey)) {
-            String sk = Pattern.quote(sectionKey.toLowerCase(Locale.ROOT));
-            if (Pattern.compile("(?i)\\b(?:give\\s+me\\s+)?([a-z0-9_-]+)\\s+(?:for|of)\\s+.*" + sk + "\\b")
-                    .matcher(t).find()) return true;
-        }
-        return Pattern.compile("(?i)\\b(?:give\\s+me\\s+)?([a-z0-9_-]+)\\s+(?:for|of)\\b").matcher(t).find();
-    }
-
-    private String extractLocale(ConsolidatedEnrichedSection s) {
-        String fromContext = normalizeLocale(getEnvelopeValue(s, "locale"));
+        String fromContext = normalizePageId(firstString(section.getContext() != null ? section.getContext().get("pageId") : null));
         if (StringUtils.hasText(fromContext)) {
             return fromContext;
         }
-        String fromPath = normalizeLocale(extractLocaleFromPath(s.getSectionUri()));
-        if (fromPath == null) fromPath = normalizeLocale(extractLocaleFromPath(s.getSectionPath()));
+        String fromEnvelope = normalizePageId(asStringFromContext(section, "envelope", "pageId"));
+        if (StringUtils.hasText(fromEnvelope)) {
+            return fromEnvelope;
+        }
+        Map<String, Object> facets = asMap(section.getContext() != null ? section.getContext().get("facets") : null);
+        if (facets != null) {
+            String fromFacets = normalizePageId(firstString(facets.get("pageId")));
+            if (StringUtils.hasText(fromFacets)) {
+                return fromFacets;
+            }
+        }
+        String fromPath = normalizePageId(extractPageIdFromPath(section.getSectionUri()));
+        if (!StringUtils.hasText(fromPath)) {
+            fromPath = normalizePageId(extractPageIdFromPath(section.getSectionPath()));
+        }
         return fromPath;
     }
 
-    private String extractLanguage(ConsolidatedEnrichedSection s, String localeFallback) {
-        String fromContext = getEnvelopeValue(s, "language");
-        if (StringUtils.hasText(fromContext)) {
-            return fromContext.toLowerCase(Locale.ROOT);
-        }
-        if (StringUtils.hasText(localeFallback)) {
-            String normalized = normalizeLocale(localeFallback);
-            if (!StringUtils.hasText(normalized)) {
-                return null;
-            }
-            int idx = normalized.indexOf('_');
-            if (idx > 0) {
-                return normalized.substring(0, idx).toLowerCase(Locale.ROOT);
-            }
-        }
-        return null;
-    }
-
-    private String extractCountry(ConsolidatedEnrichedSection s, String localeFallback) {
-        String fromContext = getEnvelopeValue(s, "country");
-        if (StringUtils.hasText(fromContext)) {
-            return fromContext.toUpperCase(Locale.ROOT);
-        }
-        if (StringUtils.hasText(localeFallback)) {
-            String normalized = normalizeLocale(localeFallback);
-            if (!StringUtils.hasText(normalized)) {
-                return null;
-            }
-            int idx = normalized.indexOf('_');
-            if (idx >= 0 && idx + 1 < normalized.length()) {
-                return normalized.substring(idx + 1).toUpperCase(Locale.ROOT);
-            }
-        }
-        return null;
-    }
-
-    private String extractTenant(ConsolidatedEnrichedSection s) {
-        String fromContext = getEnvelopeValue(s, "tenant");
-        if (StringUtils.hasText(fromContext)) {
-            return fromContext;
-        }
-        String fromUri = extractTenantFromPath(s.getSectionUri());
-        if (fromUri != null) return fromUri;
-        String fromPath = extractTenantFromPath(s.getSectionPath());
-        return fromPath != null ? fromPath : "applecom-cms";
-    }
-
-    private String extractPageId(ConsolidatedEnrichedSection s) {
-        String pid = normalizePageId(extractPageIdFromPath(s.getSectionUri()));
-        if (pid == null) pid = normalizePageId(extractPageIdFromPath(s.getSectionPath()));
-        if (pid == null) pid = normalizePageId(getFacetValue(s, "pageId"));
-        return pid;
-    }
-
-    private String extractLocaleFromPath(String path) {
-        if (!StringUtils.hasText(path)) return null;
-        java.util.regex.Matcher m = java.util.regex.Pattern
-                .compile("/([a-z]{2}_[A-Z]{2})/")
-                .matcher(path);
-        if (m.find()) return m.group(1);
-        return null;
-    }
-
-    private String extractTenantFromPath(String path) {
-        if (!StringUtils.hasText(path)) return null;
-        java.util.regex.Matcher m = java.util.regex.Pattern
-                .compile("/content/dam/([^/]+)/")
-                .matcher(path);
-        if (m.find()) return m.group(1);
-        return null;
-    }
-
-    private String extractPageIdFromPath(String path) {
-        if (!StringUtils.hasText(path)) return null;
-        // Expect ... /<locale>/<pageId>/ ...
-        java.util.regex.Matcher m = java.util.regex.Pattern
-                .compile("/[a-z]{2}_[A-Z]{2}/([^/]+)/")
-                .matcher(path);
-        if (m.find()) return m.group(1);
-        return null;
-    }
-
-    private String getEnvelopeValue(ConsolidatedEnrichedSection section, String key) {
-        if (section == null || section.getContext() == null) {
+    private String resolveLocale(ConsolidatedEnrichedSection section) {
+        if (section == null) {
             return null;
         }
-        Object envelope = section.getContext().get("envelope");
-        if (envelope instanceof Map<?,?> map) {
-            Object value = map.get(key);
-            if (value instanceof String str && StringUtils.hasText(str)) {
-                return str;
+        String fromEnvelope = normalizeLocale(asStringFromContext(section, "envelope", "locale"));
+        if (StringUtils.hasText(fromEnvelope)) {
+            return fromEnvelope;
+        }
+        String direct = normalizeLocale(firstString(section.getContext() != null ? section.getContext().get("locale") : null));
+        if (StringUtils.hasText(direct)) {
+            return direct;
+        }
+        Map<String, Object> facets = asMap(section.getContext() != null ? section.getContext().get("facets") : null);
+        if (facets != null) {
+            String facetLocale = normalizeLocale(firstString(facets.get("locale")));
+            if (StringUtils.hasText(facetLocale)) {
+                return facetLocale;
             }
+        }
+        String fromUri = normalizeLocale(extractLocaleFromPath(section.getSectionUri()));
+        if (!StringUtils.hasText(fromUri)) {
+            fromUri = normalizeLocale(extractLocaleFromPath(section.getSectionPath()));
+        }
+        return fromUri;
+    }
+
+    private String resolveLanguage(ConsolidatedEnrichedSection section, String locale) {
+        String direct = normalizeLanguage(firstString(section != null && section.getContext() != null
+                ? section.getContext().get("language") : null));
+        if (StringUtils.hasText(direct)) {
+            return direct;
+        }
+        String fromEnvelope = normalizeLanguage(asStringFromContext(section, "envelope", "language"));
+        if (StringUtils.hasText(fromEnvelope)) {
+            return fromEnvelope;
+        }
+        if (StringUtils.hasText(locale) && locale.contains("_")) {
+            return locale.substring(0, 2).toLowerCase(Locale.ROOT);
         }
         return null;
     }
 
-    private String getFacetValue(ConsolidatedEnrichedSection section, String key) {
-        if (section == null || section.getContext() == null) {
-            return null;
+    private String resolveCountry(ConsolidatedEnrichedSection section, String locale) {
+        String fromEnvelope = mapCountryAlias(asStringFromContext(section, "envelope", "country"));
+        if (StringUtils.hasText(fromEnvelope)) {
+            return fromEnvelope;
         }
-        Object facets = section.getContext().get("facets");
-        if (facets instanceof Map<?, ?> map) {
-            Object value = map.get(key);
-            if (value instanceof String str && StringUtils.hasText(str)) {
-                return str;
+        String direct = mapCountryAlias(firstString(section != null && section.getContext() != null
+                ? section.getContext().get("country") : null));
+        if (StringUtils.hasText(direct)) {
+            return direct;
+        }
+        Map<String, Object> facets = asMap(section != null && section.getContext() != null ? section.getContext().get("facets") : null);
+        if (facets != null) {
+            String facetCountry = mapCountryAlias(firstString(facets.get("country")));
+            if (StringUtils.hasText(facetCountry)) {
+                return facetCountry;
             }
-            if (value instanceof Collection<?> collection) {
-                for (Object item : collection) {
-                    if (item instanceof String str && StringUtils.hasText(str)) {
-                        return str;
-                    }
-                }
-            }
+        }
+        if (StringUtils.hasText(locale) && locale.contains("_")) {
+            return locale.substring(3).toUpperCase(Locale.ROOT);
         }
         return null;
     }
 
-    private String normalizeLocale(String raw) {
-        if (!StringUtils.hasText(raw)) {
-            return null;
+    private SearchCriteria buildCriteria(ChatbotRequest request) {
+        String message = request != null ? request.getMessage() : null;
+
+        SearchCriteriaBuilder builder = new SearchCriteriaBuilder()
+                .message(message);
+
+        String sectionKey = slugify(request != null ? request.getSectionKey() : null);
+        String inferredSection = extractSectionKey(message);
+        builder.sectionKey(firstNonBlank(sectionKey, inferredSection));
+
+        String explicitRole = normalizeRole(request != null ? request.getOriginal_field_name() : null);
+        String inferredRole = extractRole(message);
+        builder.role(firstNonBlank(explicitRole, inferredRole));
+
+        LocaleParts localeHints = parseLocaleHints(message);
+        builder.locale(localeHints.locale());
+        builder.language(localeHints.language());
+        builder.country(localeHints.country());
+
+        builder.pageId(extractPageId(message));
+
+        if (request != null && request.getContext() != null) {
+            Map<String, Object> context = request.getContext();
+            builder.sectionKey(firstNonBlank(builder.sectionKey(), slugify(firstString(context.get("sectionKey")))));
+            builder.locale(firstNonBlank(builder.locale(), normalizeLocale(firstString(context.get("locale")))));
+            builder.country(firstNonBlank(builder.country(), mapCountryAlias(firstString(context.get("country")))));
+            builder.language(firstNonBlank(builder.language(), normalizeLanguage(firstString(context.get("language")))));
+            builder.pageId(firstNonBlank(builder.pageId(), normalizePageId(firstString(context.get("pageId")))));
+
+            Map<String, Object> envelope = asMap(context.get("envelope"));
+            if (envelope != null) {
+                builder.sectionKey(firstNonBlank(builder.sectionKey(), slugify(firstString(envelope.get("sectionKey")))));
+                builder.locale(firstNonBlank(builder.locale(), normalizeLocale(firstString(envelope.get("locale")))));
+                builder.country(firstNonBlank(builder.country(), mapCountryAlias(firstString(envelope.get("country")))));
+                builder.language(firstNonBlank(builder.language(), normalizeLanguage(firstString(envelope.get("language")))));
+                builder.pageId(firstNonBlank(builder.pageId(), normalizePageId(firstString(envelope.get("pageId")))));
+            }
+
+            Map<String, Object> facets = asMap(context.get("facets"));
+            if (facets != null) {
+                builder.sectionKey(firstNonBlank(builder.sectionKey(), slugify(firstString(facets.get("sectionKey")))));
+                builder.locale(firstNonBlank(builder.locale(), normalizeLocale(firstString(facets.get("locale")))));
+                builder.country(firstNonBlank(builder.country(), mapCountryAlias(firstString(facets.get("country")))));
+                builder.pageId(firstNonBlank(builder.pageId(), normalizePageId(firstString(facets.get("pageId")))));
+            }
         }
-        String trimmed = raw.trim().replace('-', '_');
-        String[] parts = trimmed.split("_");
-        if (parts.length == 2) {
-            String language = parts[0].toLowerCase(Locale.ROOT);
-            String country = parts[1].toUpperCase(Locale.ROOT);
-            return language + "_" + country;
+
+        if (!StringUtils.hasText(builder.language()) && StringUtils.hasText(builder.locale())) {
+            builder.language(builder.locale().substring(0, 2).toLowerCase(Locale.ROOT));
         }
-        return null;
+        if (!StringUtils.hasText(builder.country()) && StringUtils.hasText(builder.locale())) {
+            builder.country(builder.locale().substring(3).toUpperCase(Locale.ROOT));
+        }
+
+        return builder.build();
     }
 
-    private String normalizePageId(String raw) {
-        if (!StringUtils.hasText(raw)) {
-            return null;
-        }
-        return raw.trim().toLowerCase(Locale.ROOT);
-    }
-
-    private LocaleCriteria extractLocaleCriteria(String message) {
-        final LocaleCriteria criteria = new LocaleCriteria();
-        if (!StringUtils.hasText(message)) {
-            return criteria;
-        }
-
-        Matcher matcher = LOCALE_PATTERN.matcher(message);
-        while (matcher.find()) {
-            String language = matcher.group(1).toLowerCase(Locale.ROOT);
-            String country = matcher.group(2).toUpperCase(Locale.ROOT);
-            String locale = language + "_" + country;
-            if (ISO_LANGUAGE_CODES.contains(language) && ISO_COUNTRY_CODES.contains(country)) {
-                criteria.locales.add(locale);
-                criteria.languages.add(language);
-                criteria.countries.add(country);
-            }
-        }
-
-        String messageLower = message.toLowerCase(Locale.ROOT);
-        COUNTRY_NAME_INDEX.forEach((name, code) -> {
-            if (messageLower.contains(name)) {
-                criteria.countries.add(code);
-            }
-        });
-
-        String[] tokens = message.split("[^A-Za-z0-9_]+");
-        for (String token : tokens) {
-            if (!StringUtils.hasText(token)) continue;
-            String trimmed = token.trim();
-            String lower = trimmed.toLowerCase(Locale.ROOT);
-
-            if (LOCALE_PATTERN.matcher(trimmed).matches()) {
-                continue;
-            }
-
-            String mappedCountry = mapCountryCode(trimmed);
-            if (mappedCountry != null) {
-                criteria.countries.add(mappedCountry);
-                continue;
-            }
-
-            if (ISO_LANGUAGE_CODES.contains(lower)) {
-                criteria.languages.add(lower);
-            }
-        }
-
-        return criteria;
-    }
-
-    private void enrichCriteriaFromContext(LocaleCriteria criteria, Map<String, Object> context) {
-        if (context == null || context.isEmpty()) {
-            return;
-        }
-        addContextValue(criteria, context.get("locale"), ValueType.LOCALE);
-        addContextValue(criteria, context.get("country"), ValueType.COUNTRY);
-        addContextValue(criteria, context.get("language"), ValueType.LANGUAGE);
-        addContextValue(criteria, context.get("pageId"), ValueType.PAGE_ID);
-
-        Object envelope = context.get("envelope");
-        if (envelope instanceof Map<?, ?> envMap) {
-            Map<?, ?> env = envMap;
-            addContextValue(criteria, env.get("locale"), ValueType.LOCALE);
-            addContextValue(criteria, env.get("country"), ValueType.COUNTRY);
-            addContextValue(criteria, env.get("language"), ValueType.LANGUAGE);
-        }
-
-        Object facets = context.get("facets");
-        if (facets instanceof Map<?, ?> facetsMap) {
-            Map<?, ?> fm = facetsMap;
-            addContextValue(criteria, fm.get("pageId"), ValueType.PAGE_ID);
-            addContextValue(criteria, fm.get("locale"), ValueType.LOCALE);
-        }
-    }
-
-    private void addContextValue(LocaleCriteria criteria, Object value, ValueType type) {
-        if (value == null) {
-            return;
-        }
-        if (value instanceof String str) {
-            addValue(criteria, str, type);
-        } else if (value instanceof Iterable<?> iterable) {
-            for (Object item : iterable) {
-                if (item instanceof String strItem) {
-                    addValue(criteria, strItem, type);
-                }
-            }
-        }
-    }
-
-    private void addValue(LocaleCriteria criteria, String value, ValueType type) {
-        if (!StringUtils.hasText(value)) {
-            return;
-        }
-        switch (type) {
-            case LOCALE -> {
-                String normalized = normalizeLocale(value);
-                if (StringUtils.hasText(normalized)) {
-                    criteria.locales.add(normalized);
-                    int idx = normalized.indexOf('_');
-                    if (idx > 0) {
-                        criteria.languages.add(normalized.substring(0, idx));
-                        String mapped = mapCountryCode(normalized.substring(idx + 1));
-                        if (mapped != null) {
-                            criteria.countries.add(mapped);
-                        }
-                    }
-                }
-            }
-            case COUNTRY -> {
-                String mapped = mapCountryCode(value);
-                if (mapped != null) {
-                    criteria.countries.add(mapped);
-                }
-            }
-            case LANGUAGE -> {
-                String lower = value.toLowerCase(Locale.ROOT);
-                if (ISO_LANGUAGE_CODES.contains(lower)) {
-                    criteria.languages.add(lower);
-                }
-            }
-            case PAGE_ID -> {
-                String lower = value.toLowerCase(Locale.ROOT);
-                if (!lower.isBlank()) {
-                    criteria.pageIds.add(lower);
-                }
-            }
-        }
-    }
-
-    private List<ChatbotResultDto> applyCriteriaFilter(List<ChatbotResultDto> dtos, LocaleCriteria criteria) {
-        if (criteria == null || criteria.isEmpty()) {
-            return dtos;
-        }
-        List<ChatbotResultDto> filtered = dtos.stream()
-                .filter(dto -> matchesLocaleCriteria(dto, criteria) && matchesPageCriteria(dto, criteria.pageIds))
-                .collect(Collectors.toList());
-        if (filtered.isEmpty() && criteria != null && !criteria.pageIds.isEmpty()) {
-            filtered = dtos.stream()
-                    .filter(dto -> matchesLocaleCriteria(dto, criteria))
-                    .collect(Collectors.toList());
-        }
-        return filtered;
-    }
-
-    private LocaleTriple resolveLocaleInfo(ConsolidatedEnrichedSection section, LocaleCriteria criteria) {
-        String rawLocale = extractLocale(section);
-        String locale = normalizeLocale(rawLocale);
-        if (!StringUtils.hasText(locale)) {
-            locale = rawLocale;
-        }
-
-        String language = extractLanguage(section, locale);
-        String country = extractCountry(section, locale);
-
-        if (!StringUtils.hasText(language)) {
-            String contextLanguage = getEnvelopeValue(section, "language");
-            if (StringUtils.hasText(contextLanguage)) {
-                language = contextLanguage.toLowerCase(Locale.ROOT);
-            }
-        }
-
-        if (!StringUtils.hasText(country)) {
-            String contextCountry = getEnvelopeValue(section, "country");
-            if (StringUtils.hasText(contextCountry)) {
-                String mapped = mapCountryCode(contextCountry);
-                if (mapped != null) {
-                    country = mapped;
-                }
-            }
-        }
-
-        if (!StringUtils.hasText(locale) && criteria != null && !criteria.locales.isEmpty()) {
-            String candidate = criteria.locales.iterator().next();
-            String normalized = normalizeLocale(candidate);
-            locale = normalized != null ? normalized : candidate;
-        }
-
-        if (!StringUtils.hasText(language) && criteria != null && !criteria.languages.isEmpty()) {
-            language = criteria.languages.iterator().next();
-        }
-
-        if (!StringUtils.hasText(country) && criteria != null && !criteria.countries.isEmpty()) {
-            country = criteria.countries.iterator().next();
-        }
-
-        if (StringUtils.hasText(locale)) {
-            String normalized = normalizeLocale(locale);
-            if (StringUtils.hasText(normalized)) {
-                locale = normalized;
-                int idx = locale.indexOf('_');
-                if (idx > 0) {
-                    if (!StringUtils.hasText(language)) {
-                        language = locale.substring(0, idx);
-                    }
-                    if (!StringUtils.hasText(country)) {
-                        country = locale.substring(idx + 1);
-                    }
-                }
-            }
-        }
-
-        if (StringUtils.hasText(language)) {
-            language = language.toLowerCase(Locale.ROOT);
-        }
-        if (StringUtils.hasText(country)) {
-            String normalizedCountry = mapCountryCode(country);
-            if (StringUtils.hasText(normalizedCountry)) {
-                country = normalizedCountry;
-            }
-            country = country.toUpperCase(Locale.ROOT);
-        }
-
-        return new LocaleTriple(locale, language, country);
-    }
-
-    private boolean matchesLocaleCriteria(ChatbotResultDto dto, LocaleCriteria criteria) {
-        if (criteria == null || criteria.isEmpty()) {
-            return true;
-        }
-
-        String locale = normalizeLocale(dto.getLocale());
-        if (locale == null) {
-            locale = normalizeLocale(extractLocaleFromPath(dto.getSectionUri()));
-            if (locale == null) {
-                locale = normalizeLocale(extractLocaleFromPath(dto.getSectionPath()));
-            }
-        }
-
-        String country = dto.getCountry() != null ? mapCountryCode(dto.getCountry()) : null;
-        String language = dto.getLanguage() != null ? dto.getLanguage().toLowerCase(Locale.ROOT) : null;
-
-        if (locale != null) {
-            int idx = locale.indexOf('_');
-            if (idx > 0) {
-                if (language == null) {
-                    language = locale.substring(0, idx);
-                }
-                if (country == null) {
-                    country = locale.substring(idx + 1);
-                }
-            }
-        }
-
-        boolean localeOk = criteria.locales.isEmpty() || (locale != null && criteria.locales.contains(locale));
-        boolean languageOk = criteria.languages.isEmpty() || (language != null && criteria.languages.contains(language));
-        boolean countryOk = criteria.countries.isEmpty()
-                || (country != null && criteria.countries.contains(country))
-                || matchesCountryFromPath(dto, criteria.countries);
-
-        return localeOk && languageOk && countryOk;
-    }
-
-    private boolean matchesCountryFromPath(ChatbotResultDto dto, Set<String> countries) {
-        if (countries == null || countries.isEmpty()) {
-            return true;
-        }
-        String uri = dto.getSectionUri() != null ? dto.getSectionUri().toUpperCase(Locale.ROOT) : null;
-        String path = dto.getSectionPath() != null ? dto.getSectionPath().toUpperCase(Locale.ROOT) : null;
-        for (String target : countries) {
-            String normalized = target.toUpperCase(Locale.ROOT);
-            String needle = "_" + normalized;
-            if ((uri != null && uri.contains(needle)) || (path != null && path.contains(needle))) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private boolean matchesPageCriteria(ChatbotResultDto dto, Set<String> pageIds) {
-        if (pageIds == null || pageIds.isEmpty()) {
-            return true;
-        }
-        String pageId = dto.getPageId();
-        String pageIdLower = pageId != null ? pageId.toLowerCase(Locale.ROOT) : null;
-        if (pageIdLower != null && pageIds.contains(pageIdLower)) {
-            return true;
-        }
-        String uri = dto.getSectionUri() != null ? dto.getSectionUri().toLowerCase(Locale.ROOT) : null;
-        String path = dto.getSectionPath() != null ? dto.getSectionPath().toLowerCase(Locale.ROOT) : null;
-        for (String candidate : pageIds) {
-            String lower = candidate.toLowerCase(Locale.ROOT);
-            if ((uri != null && (uri.contains("/" + lower + "/") || uri.endsWith("/" + lower)))
-                    || (path != null && (path.contains("/" + lower + "/") || path.endsWith("/" + lower)))) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private String mapCountryCode(String codeOrName) {
-        if (!StringUtils.hasText(codeOrName)) {
-            return null;
-        }
-        String trimmed = codeOrName.trim();
-        String lower = trimmed.toLowerCase(Locale.ROOT);
-        String mapped = COUNTRY_NAME_INDEX.get(lower);
-        if (mapped != null) {
-            return mapped;
-        }
-        String upper = trimmed.toUpperCase(Locale.ROOT);
-        if (ISO_COUNTRY_CODES.contains(upper)) {
-            return upper;
-        }
-        // fall back: use second segment if present (works for en_CA or path pieces)
-        int idx = lower.indexOf('_');
-        if (idx >= 0 && idx + 1 < lower.length()) {
-            String fallback = lower.substring(idx + 1);
-            mapped = COUNTRY_NAME_INDEX.get(fallback);
-            if (mapped != null) {
-                return mapped;
-            }
-            String fallbackUpper = fallback.toUpperCase(Locale.ROOT);
-            if (ISO_COUNTRY_CODES.contains(fallbackUpper)) {
-                return fallbackUpper;
-            }
-        }
-        return null;
-    }
-
-    private record LocaleTriple(String locale, String language, String country) {}
-
-    private static class LocaleCriteria {
-        private final Set<String> locales = new HashSet<>();
-        private final Set<String> countries = new HashSet<>();
-        private final Set<String> languages = new HashSet<>();
-        private final Set<String> pageIds = new HashSet<>();
-
-        boolean isEmpty() {
-            return locales.isEmpty() && countries.isEmpty() && languages.isEmpty() && pageIds.isEmpty();
-        }
-    }
-
-    private enum ValueType {
-        LOCALE,
-        COUNTRY,
-        LANGUAGE,
-        PAGE_ID
-    }
-
-    private Map<String, Object> buildLocaleContext(LocaleCriteria criteria) {
-        if (criteria == null || criteria.isEmpty()) {
+    private Map<String, Object> buildDerivedContext(SearchCriteria criteria) {
+        if (criteria == null) {
             return Collections.emptyMap();
         }
-        Map<String, Object> filter = new LinkedHashMap<>();
-        if (!criteria.locales.isEmpty()) {
-            Map<String, Object> envelope = new LinkedHashMap<>();
-            envelope.put("locale", new ArrayList<>(criteria.locales));
-            filter.put("envelope", envelope);
+        Map<String, Object> context = new LinkedHashMap<>();
+        Map<String, Object> envelope = new LinkedHashMap<>();
+        if (StringUtils.hasText(criteria.locale())) {
+            envelope.put("locale", criteria.locale());
         }
-        if (filter.isEmpty()) {
-            return Collections.emptyMap();
+        if (StringUtils.hasText(criteria.country())) {
+            envelope.put("country", criteria.country());
         }
-        return filter;
+        if (StringUtils.hasText(criteria.language())) {
+            envelope.put("language", criteria.language());
+        }
+        if (!envelope.isEmpty()) {
+            context.put("envelope", envelope);
+        }
+        if (StringUtils.hasText(criteria.pageId())) {
+            context.put("pageId", criteria.pageId());
+        }
+        return context.isEmpty() ? Collections.emptyMap() : context;
     }
 
-    private Map<String, Object> mergeContextFilters(Map<String, Object> base, Map<String, Object> addition) {
-        boolean baseEmpty = base == null || base.isEmpty();
-        boolean additionEmpty = addition == null || addition.isEmpty();
-        if (baseEmpty && additionEmpty) {
+    private Map<String, Object> mergeContext(Map<String, Object> base,
+                                             Map<String, Object> addition) {
+        if ((base == null || base.isEmpty()) && (addition == null || addition.isEmpty())) {
             return Collections.emptyMap();
         }
         Map<String, Object> merged = new LinkedHashMap<>();
-        if (!baseEmpty) {
-            base.forEach((k, v) -> merged.put(k, cloneContextValue(v)));
+        if (base != null) {
+            base.forEach((key, value) -> merged.put(key, copyValue(value)));
         }
-        if (!additionEmpty) {
-            addition.forEach((k, v) -> merged.merge(k, cloneContextValue(v), this::mergeContextValues));
+        if (addition != null) {
+            addition.forEach((key, value) ->
+                    merged.merge(key, copyValue(value), this::mergeContextValue));
         }
         return merged;
     }
 
-    private Object cloneContextValue(Object value) {
+    private Object mergeContextValue(Object existing, Object addition) {
+        if (existing instanceof Map<?, ?> existingMap && addition instanceof Map<?, ?> additionMap) {
+            Map<String, Object> result = new LinkedHashMap<>();
+            existingMap.forEach((key, value) -> result.put(String.valueOf(key), copyValue(value)));
+            additionMap.forEach((key, value) -> result.put(String.valueOf(key), copyValue(value)));
+            return result;
+        }
+        if (existing instanceof Collection<?> || addition instanceof Collection<?>) {
+            LinkedHashSet<Object> combined = new LinkedHashSet<>();
+            addToSet(combined, existing);
+            addToSet(combined, addition);
+            return new ArrayList<>(combined);
+        }
+        return addition;
+    }
+
+    private void addToSet(Set<Object> target, Object value) {
+        if (value instanceof Collection<?> collection) {
+            for (Object item : collection) {
+                if (item != null) {
+                    target.add(item);
+                }
+            }
+        } else if (value != null) {
+            target.add(value);
+        }
+    }
+
+    private Object copyValue(Object value) {
         if (value instanceof Map<?, ?> map) {
             Map<String, Object> copy = new LinkedHashMap<>();
-            map.forEach((k, v) -> copy.put(String.valueOf(k), cloneContextValue(v)));
+            map.forEach((key, val) -> copy.put(String.valueOf(key), copyValue(val)));
             return copy;
         }
         if (value instanceof Collection<?> collection) {
-            List<String> copy = new ArrayList<>();
+            List<Object> copy = new ArrayList<>();
             for (Object item : collection) {
-                if (item != null) {
-                    copy.add(item.toString());
-                }
+                copy.add(copyValue(item));
             }
             return copy;
         }
         return value;
     }
 
-    private Object mergeContextValues(Object existing, Object addition) {
-        if (existing instanceof Map<?, ?> existingMap && addition instanceof Map<?, ?> additionMap) {
-            Map<String, Object> result = new LinkedHashMap<>();
-            existingMap.forEach((k, v) -> result.put(String.valueOf(k), cloneContextValue(v)));
-            additionMap.forEach((k, v) -> result.merge(String.valueOf(k), cloneContextValue(v), this::mergeContextValues));
-            return result;
+    private String extractSectionKey(String message) {
+        if (!StringUtils.hasText(message)) {
+            return null;
         }
-        Collection<?> existingCollection = existing instanceof Collection<?> ? (Collection<?>) existing : null;
-        Collection<?> additionCollection = addition instanceof Collection<?> ? (Collection<?>) addition : null;
-        if (existingCollection != null || additionCollection != null) {
-            LinkedHashSet<String> combined = new LinkedHashSet<>();
-            if (existingCollection != null) {
-                for (Object item : existingCollection) {
-                    if (item != null) combined.add(item.toString());
-                }
-            } else if (existing != null) {
-                combined.add(existing.toString());
-            }
-            if (additionCollection != null) {
-                for (Object item : additionCollection) {
-                    if (item != null) combined.add(item.toString());
-                }
-            } else if (addition != null) {
-                combined.add(addition.toString());
-            }
-            return new ArrayList<>(combined);
+        Matcher matcher = SECTION_PATTERN.matcher(message);
+        if (matcher.find()) {
+            return slugify(matcher.group(1));
         }
-        if (existing == null) {
-            return addition;
-        }
-        if (addition == null) {
-            return existing;
-        }
-        if (existing.equals(addition)) {
-            return existing;
-        }
-        LinkedHashSet<String> combined = new LinkedHashSet<>();
-        combined.add(existing.toString());
-        combined.add(addition.toString());
-        return new ArrayList<>(combined);
+        return null;
     }
 
-    private void addSectionRows(LinkedHashMap<UUID, ConsolidatedEnrichedSection> agg,
-                                List<ConsolidatedEnrichedSection> rows) {
-        if (agg == null || rows == null) {
-            return;
+    private String extractRole(String message) {
+        if (!StringUtils.hasText(message)) {
+            return null;
         }
-        for (ConsolidatedEnrichedSection row : rows) {
-            if (row != null && row.getId() != null) {
-                agg.putIfAbsent(row.getId(), row);
+        Matcher matcher = ROLE_PATTERN.matcher(message);
+        if (matcher.find()) {
+            return normalizeRole(matcher.group(1));
+        }
+        String lower = message.toLowerCase(Locale.ROOT);
+        for (String keyword : KNOWN_ROLE_KEYWORDS) {
+            if (lower.contains(keyword)) {
+                return keyword;
             }
         }
+        return null;
     }
 
-    private boolean roleExists(String roleHint,
-                               List<ChatbotResultDto> vectorDtos,
-                               List<ConsolidatedEnrichedSection> consolidatedMatches) {
-        if (!StringUtils.hasText(roleHint)) {
-            return false;
+    private String extractPageId(String message) {
+        if (!StringUtils.hasText(message)) {
+            return null;
         }
-        String needle = roleHint.toLowerCase(Locale.ROOT);
-        if (vectorDtos != null) {
-            for (ChatbotResultDto dto : vectorDtos) {
-                if (dto.getContentRole() != null
-                        && dto.getContentRole().toLowerCase(Locale.ROOT).contains(needle)) {
-                    return true;
+        Matcher matcher = PAGE_ID_PATTERN.matcher(message);
+        if (matcher.find()) {
+            return normalizePageId(matcher.group(1));
+        }
+        return null;
+    }
+
+    private LocaleParts parseLocaleHints(String message) {
+        if (!StringUtils.hasText(message)) {
+            return LocaleParts.EMPTY;
+        }
+        Matcher localeMatcher = MESSAGE_LOCALE_PATTERN.matcher(message);
+        if (localeMatcher.find()) {
+            String language = localeMatcher.group(1).toLowerCase(Locale.ROOT);
+            String country = localeMatcher.group(2).toUpperCase(Locale.ROOT);
+            return new LocaleParts(language + "_" + country, language, country);
+        }
+        String lower = message.toLowerCase(Locale.ROOT);
+        for (String phrase : COUNTRY_PHRASES) {
+            if (lower.contains(phrase)) {
+                String code = COUNTRY_TOKEN_TO_CODE.get(phrase.replaceAll("[^a-z]", ""));
+                if (code != null) {
+                    return new LocaleParts(null, null, code);
                 }
             }
         }
-        if (consolidatedMatches != null) {
-            for (ConsolidatedEnrichedSection section : consolidatedMatches) {
-                if (section != null && section.getOriginalFieldName() != null
-                        && section.getOriginalFieldName().toLowerCase(Locale.ROOT).contains(needle)) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    private List<ChatbotResultDto> finalizeResults(List<ChatbotResultDto> items,
-                                                   LocaleCriteria localeCriteria,
-                                                   ChatbotRequest request,
-                                                   String sectionKey,
-                                                   String roleHint,
-                                                   boolean applyRoleFilter,
-                                                   int limit) {
-        if (items == null || items.isEmpty()) {
-            return List.of();
-        }
-
-        List<ChatbotResultDto> trimmed = items.size() > limit ? new ArrayList<>(items.subList(0, limit))
-                : new ArrayList<>(items);
-
-        String inferredLocale = localeCriteria.locales.isEmpty() ? null : localeCriteria.locales.iterator().next();
-        String inferredCountry = localeCriteria.countries.isEmpty() ? null : localeCriteria.countries.iterator().next();
-        String inferredLanguage = localeCriteria.languages.isEmpty() ? null : localeCriteria.languages.iterator().next();
-
-        for (int i = 0; i < trimmed.size(); i++) {
-            ChatbotResultDto item = trimmed.get(i);
-            item.setCfId("cf" + (i + 1));
-
-            var terms = new LinkedHashSet<String>();
-            if (StringUtils.hasText(sectionKey)) {
-                terms.add(sectionKey);
-            }
-            if (applyRoleFilter && StringUtils.hasText(roleHint)) {
-                terms.add(roleHint);
-            }
-            if (request != null && request.getTags() != null) {
-                terms.addAll(request.getTags());
-            }
-            if (request != null && request.getKeywords() != null) {
-                terms.addAll(request.getKeywords());
-            }
-            if (!localeCriteria.pageIds.isEmpty()) {
-                terms.addAll(localeCriteria.pageIds);
-            }
-            item.setMatchTerms(new ArrayList<>(terms));
-
-            if (!StringUtils.hasText(item.getLocale()) && StringUtils.hasText(inferredLocale)) {
-                item.setLocale(inferredLocale);
-            }
-            if (!StringUtils.hasText(item.getCountry()) && StringUtils.hasText(inferredCountry)) {
-                item.setCountry(inferredCountry);
-            }
-            if (!StringUtils.hasText(item.getLanguage()) && StringUtils.hasText(inferredLanguage)) {
-                item.setLanguage(inferredLanguage);
-            }
-
-            if (StringUtils.hasText(item.getLocale())) {
-                String normalized = normalizeLocale(item.getLocale());
-                if (StringUtils.hasText(normalized)) {
-                    int idx = normalized.indexOf('_');
-                    if (idx > 0) {
-                        String langPart = normalized.substring(0, idx);
-                        String countryPart = normalized.substring(idx + 1);
-                        if (!StringUtils.hasText(item.getLanguage())) {
-                            item.setLanguage(langPart);
-                        }
-                        if (!StringUtils.hasText(item.getCountry())) {
-                            item.setCountry(countryPart);
-                        }
-                    }
-                }
-            }
-        }
-
-        return trimmed;
-    }
-
-    private List<String> buildSectionKeyVariants(String sectionKey) {
-        if (!StringUtils.hasText(sectionKey)) {
-            return List.of();
-        }
-        String normalized = sectionKey.toLowerCase(Locale.ROOT).trim();
-        LinkedHashSet<String> variants = new LinkedHashSet<>();
-        variants.add(normalized);
-
-        String root = stripKnownSuffixes(normalized);
-        addVariantsFromRoot(variants, root);
-
-        String singularRoot = singularizeKeySegment(root);
-        if (StringUtils.hasText(singularRoot) && !singularRoot.equals(root)) {
-            addVariantsFromRoot(variants, singularRoot);
-        }
-
-        String normalizedSingular = singularizeKeySegment(normalized);
-        if (StringUtils.hasText(normalizedSingular)) {
-            variants.add(normalizedSingular);
-        }
-
-        return new ArrayList<>(variants);
-    }
-
-    private void addVariantsFromRoot(Set<String> variants, String root) {
-        if (!StringUtils.hasText(root)) {
-            return;
-        }
-        String base = root.toLowerCase(Locale.ROOT).trim();
-        variants.add(base);
-        variants.add(base + "-section");
-        variants.add(base + "-items");
-        variants.add(base + "-items-horizontal");
-        variants.add(base + "-items-vertical");
-        variants.add(base + "-items-wide");
-        variants.add(base + "-items-desktop");
-        variants.add(base + "-items-mobile");
-    }
-
-    private String stripKnownSuffixes(String key) {
-        if (!StringUtils.hasText(key)) {
-            return key;
-        }
-        String result = key.toLowerCase(Locale.ROOT).trim();
-        String[] suffixes = {
-                "-items-horizontal",
-                "-items-vertical",
-                "-items-wide",
-                "-items-desktop",
-                "-items-mobile",
-                "-items",
-                "-section"
-        };
-        boolean stripped;
-        do {
-            stripped = false;
-            for (String suffix : suffixes) {
-                if (result.endsWith(suffix)) {
-                    result = result.substring(0, result.length() - suffix.length());
-                    stripped = true;
-                    break;
-                }
-            }
-        } while (stripped && StringUtils.hasText(result));
-        return result;
-    }
-
-    private String singularizeKeySegment(String key) {
-        if (!StringUtils.hasText(key)) {
-            return key;
-        }
-        String value = key.toLowerCase(Locale.ROOT).trim();
-        int idx = value.lastIndexOf('-');
-        String prefix = idx >= 0 ? value.substring(0, idx + 1) : "";
-        String segment = idx >= 0 ? value.substring(idx + 1) : value;
-        if (segment.length() <= 3) {
-            return key;
-        }
-        if (segment.endsWith("ies") && segment.length() > 3) {
-            segment = segment.substring(0, segment.length() - 3) + "y";
-        } else if (segment.endsWith("ses") && segment.length() > 3) {
-            segment = segment.substring(0, segment.length() - 2);
-        } else if (segment.endsWith("s") && segment.length() > 3 && !segment.endsWith("ss")) {
-            segment = segment.substring(0, segment.length() - 1);
-        } else {
-            return key;
-        }
-        String singular = prefix + segment;
-        return StringUtils.hasText(singular) ? singular : key;
-    }
-
-    private static Map<String, String> buildCountryNameIndex() {
-        Map<String, String> index = new HashMap<>();
-        for (Locale locale : Locale.getAvailableLocales()) {
-            String country = locale.getCountry();
-            if (!StringUtils.hasText(country)) {
+        String[] tokens = lower.split("[^a-z0-9]+");
+        for (String token : tokens) {
+            if (!StringUtils.hasText(token)) {
                 continue;
             }
-            String code = country.toUpperCase(Locale.ROOT);
-            String english = locale.getDisplayCountry(Locale.ENGLISH);
-            if (StringUtils.hasText(english)) {
-                index.putIfAbsent(english.toLowerCase(Locale.ROOT), code);
+            String sanitized = token.replaceAll("[^a-z]", "");
+            String country = COUNTRY_TOKEN_TO_CODE.get(sanitized);
+            if (country != null) {
+                return new LocaleParts(null, null, country);
             }
-            String localName = locale.getDisplayCountry(locale);
-            if (StringUtils.hasText(localName)) {
-                index.putIfAbsent(localName.toLowerCase(Locale.ROOT), code);
+            String language = LANGUAGE_ALIASES.get(sanitized);
+            if (language != null) {
+                return new LocaleParts(null, language, null);
             }
         }
-        for (String code : ISO_COUNTRY_CODES) {
-            index.putIfAbsent(code.toLowerCase(Locale.ROOT), code);
+        return LocaleParts.EMPTY;
+    }
+
+    private String slugify(String value) {
+        if (!StringUtils.hasText(value)) {
+            return null;
         }
-        // Common synonyms and regional naming variations
-        index.put("usa", "US");
-        index.put("u.s.", "US");
-        index.put("u.s.a", "US");
-        index.put("america", "US");
-        index.put("united states", "US");
-        index.put("united states of america", "US");
-        index.put("uk", "GB");
-        index.put("united kingdom", "GB");
-        index.put("great britain", "GB");
-        index.put("britain", "GB");
-        index.put("south korea", "KR");
-        index.put("north korea", "KP");
-        index.put("korea", "KR");
-        index.put("hong kong", "HK");
-        index.put("macau", "MO");
-        index.put("mainland china", "CN");
-        index.put("people's republic of china", "CN");
-        index.put("czech republic", "CZ");
-        index.put("ivory coast", "CI");
-        index.put("uae", "AE");
-        index.put("united arab emirates", "AE");
-        index.put("republic of korea", "KR");
-        index.put("saudi arabia", "SA");
-        index.put("kingdom of saudi arabia", "SA");
-        return Collections.unmodifiableMap(index);
+        String slug = value.trim().toLowerCase(Locale.ROOT)
+                .replaceAll("[^a-z0-9]+", "-")
+                .replaceAll("-{2,}", "-");
+        if (slug.startsWith("-")) {
+            slug = slug.substring(1);
+        }
+        if (slug.endsWith("-")) {
+            slug = slug.substring(0, slug.length() - 1);
+        }
+        return StringUtils.hasText(slug) ? slug : null;
+    }
+
+    private String normalizeRole(String value) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        return value.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private String normalizePageId(String value) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        return value.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private String normalizeLocale(String value) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        String trimmed = value.trim().replace('-', '_');
+        Matcher matcher = NORMALIZE_LOCALE_PATTERN.matcher(trimmed);
+        if (matcher.matches()) {
+            return matcher.group(1).toLowerCase(Locale.ROOT) + "_" + matcher.group(2).toUpperCase(Locale.ROOT);
+        }
+        return null;
+    }
+
+    private String normalizeLanguage(String value) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        String trimmed = value.trim().toLowerCase(Locale.ROOT);
+        if (trimmed.length() == 2) {
+            return trimmed;
+        }
+        return LANGUAGE_ALIASES.get(trimmed);
+    }
+
+    private String mapCountryAlias(String value) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        String trimmed = value.trim();
+        String lower = trimmed.toLowerCase(Locale.ROOT);
+        String sanitized = lower.replaceAll("[^a-z]", "");
+        String mapped = COUNTRY_TOKEN_TO_CODE.get(sanitized);
+        if (mapped != null) {
+            return mapped;
+        }
+        if (sanitized.length() == 2) {
+            return sanitized.toUpperCase(Locale.ROOT);
+        }
+        return null;
+    }
+
+    private String extractTenantFromPath(String path) {
+        if (!StringUtils.hasText(path)) {
+            return null;
+        }
+        Matcher matcher = Pattern.compile("/content/dam/([^/]+)/").matcher(path);
+        if (matcher.find()) {
+            return matcher.group(1);
+        }
+        return null;
+    }
+
+    private String extractPageIdFromPath(String path) {
+        if (!StringUtils.hasText(path)) {
+            return null;
+        }
+        Matcher matcher = Pattern.compile("/[a-z]{2}_[A-Z]{2}/([^/]+)/").matcher(path);
+        if (matcher.find()) {
+            return matcher.group(1);
+        }
+        return null;
+    }
+
+    private String extractLocaleFromPath(String path) {
+        if (!StringUtils.hasText(path)) {
+            return null;
+        }
+        Matcher matcher = Pattern.compile("/([a-z]{2}_[A-Z]{2})/").matcher(path);
+        if (matcher.find()) {
+            return matcher.group(1);
+        }
+        return null;
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (StringUtils.hasText(value)) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private String asStringFromContext(ConsolidatedEnrichedSection section, String topLevelKey, String nestedKey) {
+        if (section == null || section.getContext() == null) {
+            return null;
+        }
+        Map<String, Object> parent = asMap(section.getContext().get(topLevelKey));
+        if (parent == null) {
+            return null;
+        }
+        return firstString(parent.get(nestedKey));
+    }
+
+    private Map<String, Object> asMap(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> copy = new LinkedHashMap<>();
+            map.forEach((key, val) -> copy.put(String.valueOf(key), val));
+            return copy;
+        }
+        return null;
+    }
+
+    private String firstString(Object value) {
+        if (value instanceof String str && StringUtils.hasText(str)) {
+            return str;
+        }
+        if (value instanceof Collection<?> collection) {
+            for (Object item : collection) {
+                if (item instanceof String str && StringUtils.hasText(str)) {
+                    return str;
+                }
+            }
+        }
+        return null;
+    }
+
+    private record LocaleParts(String locale, String language, String country) {
+        private static final LocaleParts EMPTY = new LocaleParts(null, null, null);
+    }
+
+    private record SearchCriteria(String sectionKey,
+                                  String role,
+                                  String locale,
+                                  String language,
+                                  String country,
+                                  String pageId,
+                                  String message) {
+        String embeddingQuery() {
+            return StringUtils.hasText(message) ? message : sectionKey;
+        }
+    }
+
+    private static final class SearchCriteriaBuilder {
+        private String sectionKey;
+        private String role;
+        private String locale;
+        private String language;
+        private String country;
+        private String pageId;
+        private String message;
+
+        SearchCriteriaBuilder sectionKey(String sectionKey) {
+            if (StringUtils.hasText(sectionKey)) {
+                this.sectionKey = sectionKey;
+            }
+            return this;
+        }
+
+        SearchCriteriaBuilder role(String role) {
+            if (StringUtils.hasText(role)) {
+                this.role = role;
+            }
+            return this;
+        }
+
+        SearchCriteriaBuilder locale(String locale) {
+            if (StringUtils.hasText(locale)) {
+                this.locale = locale;
+            }
+            return this;
+        }
+
+        SearchCriteriaBuilder language(String language) {
+            if (StringUtils.hasText(language)) {
+                this.language = language;
+            }
+            return this;
+        }
+
+        SearchCriteriaBuilder country(String country) {
+            if (StringUtils.hasText(country)) {
+                this.country = country;
+            }
+            return this;
+        }
+
+        SearchCriteriaBuilder pageId(String pageId) {
+            if (StringUtils.hasText(pageId)) {
+                this.pageId = pageId;
+            }
+            return this;
+        }
+
+        SearchCriteriaBuilder message(String message) {
+            this.message = message;
+            return this;
+        }
+
+        String sectionKey() {
+            return sectionKey;
+        }
+
+        String locale() {
+            return locale;
+        }
+
+        String language() {
+            return language;
+        }
+
+        String country() {
+            return country;
+        }
+
+        String pageId() {
+            return pageId;
+        }
+
+        SearchCriteria build() {
+            return new SearchCriteria(sectionKey, role, locale, language, country, pageId, message);
+        }
     }
 }
