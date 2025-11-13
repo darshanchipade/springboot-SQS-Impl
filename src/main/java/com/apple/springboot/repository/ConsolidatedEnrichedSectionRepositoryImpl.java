@@ -76,4 +76,18 @@ public class ConsolidatedEnrichedSectionRepositoryImpl implements ConsolidatedEn
         q.setMaxResults(Math.max(1, limit));
         return q.getResultList();
     }
+
+    @Override
+    public List<ConsolidatedEnrichedSection> findByPageId(String pageId, int limit) {
+        String sql = "SELECT * FROM consolidated_enriched_sections " +
+                "WHERE LOWER(COALESCE(context#>>'{facets,pageId}', '')) = LOWER(:pageId) " +
+                "   OR LOWER(COALESCE(context->>'pageId', '')) = LOWER(:pageId) " +
+                "   OR LOWER(COALESCE(context#>>'{envelope,pageId}', '')) = LOWER(:pageId) " +
+                "   OR LOWER(COALESCE(section_path, '')) LIKE LOWER(CONCAT('%/', :pageId, '/%')) " +
+                "ORDER BY saved_at DESC NULLS LAST";
+        Query q = entityManager.createNativeQuery(sql, ConsolidatedEnrichedSection.class);
+        q.setParameter("pageId", pageId);
+        q.setMaxResults(Math.max(1, limit));
+        return q.getResultList();
+    }
 }

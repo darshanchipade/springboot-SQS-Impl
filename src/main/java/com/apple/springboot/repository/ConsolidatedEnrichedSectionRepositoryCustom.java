@@ -17,4 +17,5 @@ public interface ConsolidatedEnrichedSectionRepositoryCustom {
      */
     List<ConsolidatedEnrichedSection> findByMetadataQuery(String query, int limit);
     List<ConsolidatedEnrichedSection> findByContextSectionKey(String sectionKey, int limit);
+    List<ConsolidatedEnrichedSection> findByPageId(String pageId, int limit);
 }
