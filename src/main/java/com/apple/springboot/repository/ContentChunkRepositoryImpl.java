@@ -51,13 +51,20 @@ public class ContentChunkRepositoryImpl implements ContentChunkRepositoryCustom 
             buildJsonbQueries(contextMap, new ArrayList<>(), sql, params);
         }
         if (sectionKeyFilter != null && !sectionKeyFilter.isBlank()) {
+            String loweredKey = sectionKeyFilter.toLowerCase();
             sql.append(" AND (")
-                    .append("LOWER(COALESCE(s.section_path, '')) LIKE :sectionKey ")
+                    .append("LOWER(COALESCE(s.original_field_name, '')) LIKE :sectionKey ")
+                    .append("OR LOWER(COALESCE(s.section_path, '')) LIKE :sectionKey ")
                     .append("OR LOWER(COALESCE(s.section_uri, '')) LIKE :sectionKey ")
                     .append("OR LOWER(COALESCE(s.context->>'usagePath', '')) LIKE :sectionKey ")
-                    .append("OR LOWER(COALESCE(s.context#>>'{envelope,usagePath}', '')) LIKE :sectionKey)")
+                    .append("OR LOWER(COALESCE(s.context#>>'{envelope,usagePath}', '')) LIKE :sectionKey ")
+                    .append("OR LOWER(COALESCE(s.context#>>'{sectionKey}', '')) = :sectionKeyExact ")
+                    .append("OR LOWER(COALESCE(s.context#>>'{facets,sectionKey}', '')) = :sectionKeyExact ")
+                    .append("OR LOWER(COALESCE(s.context#>>'{envelope,sectionKey}', '')) = :sectionKeyExact ")
+                    .append("OR LOWER(COALESCE(c.source_field, '')) LIKE :sectionKey)")
             ;
-            params.put("sectionKey", "%" + sectionKeyFilter.toLowerCase() + "%"); // BOTH-SIDES WILDCARD
+            params.put("sectionKey", "%" + loweredKey + "%"); // BOTH-SIDES WILDCARD
+            params.put("sectionKeyExact", loweredKey);
         }
         if (embedding != null) {
             if (params.containsKey("distance_threshold")) {
