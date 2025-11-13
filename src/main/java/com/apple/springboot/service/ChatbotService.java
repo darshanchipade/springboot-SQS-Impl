@@ -132,25 +132,61 @@ public class ChatbotService {
             }
         }
 
+        SearchCriteria fallbackCriteria = criteria;
+        Map<String, Object> baseRequestContext = requestContext;
+        Map<String, Object> baseInterpretationContext = interpretationContext;
+
+        if (!combined.isEmpty()) {
+            assignCfIds(combined, criteria, tagFilters, keywordFilters);
+            return combined;
+        }
+
+        if (StringUtils.hasText(criteria.role())) {
+            SearchCriteria relaxed = criteria.withoutRole();
+            if (!relaxed.equals(criteria)) {
+                List<ChatbotResultDto> retry = runSearch(relaxed, requestContext, interpretationContext, tagFilters, keywordFilters, limit);
+                if (!retry.isEmpty()) {
+                    combined = retry;
+                    fallbackCriteria = relaxed;
+                }
+            }
+        }
+
         if (combined.isEmpty()) {
-            SearchCriteria relaxedContext = criteria.withoutContext();
-            boolean needsContextRelaxation = !relaxedContext.equals(criteria)
-                    || (requestContext != null && !requestContext.isEmpty())
-                    || (interpretationContext != null && !interpretationContext.isEmpty());
-            if (needsContextRelaxation) {
+            SearchCriteria relaxedContext = fallbackCriteria.withoutContext();
+            if (!relaxedContext.equals(fallbackCriteria)) {
                 List<ChatbotResultDto> retry = runSearch(relaxedContext, Collections.emptyMap(), Collections.emptyMap(), tagFilters, keywordFilters, limit);
                 if (!retry.isEmpty()) {
                     combined = retry;
-                    criteria = relaxedContext;
+                    fallbackCriteria = relaxedContext;
                 }
             }
         }
 
         if (!combined.isEmpty()) {
-            assignCfIds(combined, criteria, tagFilters, keywordFilters);
+            assignCfIds(combined, fallbackCriteria, tagFilters, keywordFilters);
+            return combined;
         }
 
-        return combined;
+        // Final fallback: attempt search using the original user message only, no structured filters.
+        if (StringUtils.hasText(userMessage)) {
+            SearchCriteria bareCriteria = new SearchCriteria(
+                    slugify(request != null ? request.getSectionKey() : null),
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    userMessage
+            );
+            List<ChatbotResultDto> retry = runSearch(bareCriteria, Collections.emptyMap(), Collections.emptyMap(), tagFilters, keywordFilters, limit);
+            if (!retry.isEmpty()) {
+                assignCfIds(retry, bareCriteria, tagFilters, keywordFilters);
+                return retry;
+            }
+        }
+
+        return List.of();
     }
 
     private int determineLimit(ChatbotRequest request) {

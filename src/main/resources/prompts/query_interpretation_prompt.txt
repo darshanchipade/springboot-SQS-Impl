@@ -9,7 +9,7 @@ OUTPUT REQUIREMENTS
   * sectionKey and sectionName: lowercase, hyphen-separated when appropriate (e.g., "product-tile-section").
   * pageId: lowercase single token (e.g., "ipad", "iphone").
   * role: lowercase identifier for the requested content field (e.g., "headline", "inlineHeader").
-  * locale: if both language and country are known, format as "ll_CC" (e.g., "en_US"); otherwise leave blank.
+  * locale: if both language and country are known, format as "ll_CC" (e.g., "en_US"); otherwise keep it as an empty string but still include the envelope with language/country hints.
   * language: ISO 639-1 lowercase (e.g., "en"). If only spelled-out language is given ("English"), map to ISO code.
   * country: ISO 3166-1 alpha-2 uppercase (e.g., "US"). Accept both country names and abbreviations.
 - tags and keywords must be arrays of lowercase strings without duplicates.
