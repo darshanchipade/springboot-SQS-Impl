@@ -675,6 +675,51 @@ public class ChatbotService {
         return value;
     }
 
+    private Map<String, Object> sanitizeContext(Map<String, Object> context) {
+        if (context == null || context.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Map<String, Object> cleaned = new LinkedHashMap<>();
+        context.forEach((key, value) -> {
+            Object sanitized = sanitizeContextValue(value);
+            if (sanitized != null) {
+                cleaned.put(key, sanitized);
+            }
+        });
+        return cleaned.isEmpty() ? Collections.emptyMap() : cleaned;
+    }
+
+    private Object sanitizeContextValue(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof String str) {
+            String trimmed = str.trim();
+            return StringUtils.hasText(trimmed) ? trimmed : null;
+        }
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> nested = new LinkedHashMap<>();
+            map.forEach((key, val) -> {
+                Object sanitized = sanitizeContextValue(val);
+                if (sanitized != null) {
+                    nested.put(String.valueOf(key), sanitized);
+                }
+            });
+            return nested.isEmpty() ? null : nested;
+        }
+        if (value instanceof Collection<?> collection) {
+            List<Object> list = new ArrayList<>();
+            for (Object item : collection) {
+                Object sanitized = sanitizeContextValue(item);
+                if (sanitized != null) {
+                    list.add(sanitized);
+                }
+            }
+            return list.isEmpty() ? null : list;
+        }
+        return value;
+    }
+
     private String extractSectionKey(String message) {
         if (!StringUtils.hasText(message)) {
             return null;
