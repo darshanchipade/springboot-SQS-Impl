@@ -81,9 +81,19 @@ public class EnrichmentPipelineService {
         // Filter to only items that need enrichment (text changed)
         List<CleansedItemDetail> itemsToQueue = itemsToEnrich.stream()
                 .filter(itemDetail -> !enrichedContentElementRepository
-                        .existsByItemSourcePathAndItemOriginalFieldNameAndCleansedText(
-                                itemDetail.sourcePath, itemDetail.originalFieldName, itemDetail.cleansedContent))
+                        .existsByCleansedDataIdAndItemSourcePathAndItemOriginalFieldNameAndCleansedText(
+                                cleansedDataStoreId,
+                                itemDetail.sourcePath,
+                                itemDetail.originalFieldName,
+                                itemDetail.cleansedContent))
                 .collect(Collectors.toList());
+
+        if (itemsToQueue.isEmpty()) {
+            logger.info("No items require enrichment for CleansedDataStore ID: {}. Marking as ENRICHED_NO_ITEMS_TO_PROCESS.", cleansedDataStoreId);
+            cleansedDataEntry.setStatus("ENRICHED_NO_ITEMS_TO_PROCESS");
+            cleansedDataStoreRepository.save(cleansedDataEntry);
+            return;
+        }
 
         // Track completion on the ACTUAL number queued
         completionService.startTracking(cleansedDataStoreId, itemsToQueue.size());
