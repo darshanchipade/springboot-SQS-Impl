@@ -37,6 +37,7 @@ public class DataIngestionService {
 
     // Treat these as extractable content fields
     private static final Set<String> CONTENT_FIELD_KEYS = Set.of("copy", "disclaimers", "text", "url");
+    private static final Set<String> ICON_NODE_KEYS = Set.of("icon");
     private static final Pattern LOCALE_PATTERN = Pattern.compile("(?<=/)([a-z]{2})[-_]([A-Z]{2})(?=/|$)");
     private static final String USAGE_REF_DELIM = " ::ref:: ";
     private static final Map<String, String> EVENT_KEYWORDS = Map.of(
@@ -613,8 +614,12 @@ public class DataIngestionService {
         currentFacets.remove("text"); // Avoid duplicating extracted text
         currentFacets.remove("url");  // Avoid duplicating extracted url text
         currentNode.fields().forEachRemaining(entry -> {
-            if (entry.getValue().isValueNode() && !entry.getKey().startsWith("_")) {
-                currentFacets.put(entry.getKey(), entry.getValue().asText());
+            JsonNode value = entry.getValue();
+            String key = entry.getKey();
+            if (value.isValueNode() && !key.startsWith("_")) {
+                currentFacets.put(key, value.asText());
+            } else if (ICON_NODE_KEYS.contains(key) && value.isObject()) {
+                enrichFacetsWithIconProperties(value, key, currentFacets);
             }
         });
         return currentFacets;
@@ -773,6 +778,21 @@ public class DataIngestionService {
         // Collapse whitespace
         cleansed = cleansed.replaceAll("\\s+", " ").trim();
         return cleansed;
+    }
+
+    private void enrichFacetsWithIconProperties(JsonNode iconNode, String prefix, Facets targetFacets) {
+        if (iconNode == null || iconNode.isNull()) return;
+        iconNode.fields().forEachRemaining(entry -> {
+            String key = entry.getKey();
+            if (key.startsWith("_")) return;
+            JsonNode value = entry.getValue();
+            String facetKey = (prefix == null || prefix.isBlank()) ? key : prefix + "." + key;
+            if (value.isValueNode()) {
+                targetFacets.put(facetKey, value.asText());
+            } else if (value.isObject()) {
+                enrichFacetsWithIconProperties(value, facetKey, targetFacets);
+            }
+        });
     }
 
     private static class IngestionCounters {
