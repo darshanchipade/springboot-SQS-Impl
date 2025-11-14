@@ -116,26 +116,104 @@ public class ChatbotService {
         List<String> keywordFilters = new ArrayList<>(keywordSet);
 
         Map<String, Object> interpretationContext = sanitizeContext(interpretation != null ? interpretation.context() : null);
+        if (interpretation != null) {
+            String interpretedPageId = normalizePageId(interpretation.pageId());
+            if (!StringUtils.hasText(criteria.pageId()) && StringUtils.hasText(interpretedPageId)) {
+                criteria = criteria.withPageId(interpretedPageId);
+            }
+            Map<String, Object> facets = asMap(interpretationContext.get("facets"));
+            if (!StringUtils.hasText(criteria.sectionKey()) && facets != null) {
+                String fromContext = normalizeKey(firstString(facets.get("sectionKey")));
+                if (StringUtils.hasText(fromContext)) {
+                    criteria = criteria.withSectionKey(fromContext);
+                }
+            }
+        }
 
         int limit = determineLimit(request);
 
         List<ChatbotResultDto> combined = runSearch(criteria, requestContext, interpretationContext, tagFilters, keywordFilters, limit);
+        if (combined.isEmpty() && !StringUtils.hasText(criteria.sectionKey()) && StringUtils.hasText(criteria.pageId())) {
+            List<ChatbotResultDto> expanded = trySectionDiscovery(criteria, requestContext, interpretationContext, tagFilters, keywordFilters, limit);
+            if (!expanded.isEmpty()) {
+                combined = expanded;
+            }
+        }
 
         if (combined.isEmpty() && StringUtils.hasText(criteria.role())) {
             SearchCriteria relaxed = criteria.withoutRole();
             if (!relaxed.equals(criteria)) {
-                combined = runSearch(relaxed, requestContext, interpretationContext, tagFilters, keywordFilters, limit);
-                if (!combined.isEmpty()) {
+                List<ChatbotResultDto> retry = runSearch(relaxed, requestContext, interpretationContext, tagFilters, keywordFilters, limit);
+                if (!retry.isEmpty()) {
+                    combined = retry;
                     criteria = relaxed;
                 }
             }
         }
 
+        SearchCriteria fallbackCriteria = criteria;
+        Map<String, Object> baseRequestContext = requestContext;
+        Map<String, Object> baseInterpretationContext = interpretationContext;
+
         if (!combined.isEmpty()) {
             assignCfIds(combined, criteria, tagFilters, keywordFilters);
+            return combined;
         }
 
-        return combined;
+        if (StringUtils.hasText(criteria.role())) {
+            SearchCriteria relaxed = criteria.withoutRole();
+            if (!relaxed.equals(criteria)) {
+                List<ChatbotResultDto> retry = runSearch(relaxed, requestContext, interpretationContext, tagFilters, keywordFilters, limit);
+                if (!retry.isEmpty()) {
+                    combined = retry;
+                    fallbackCriteria = relaxed;
+                }
+            }
+        }
+
+        if (combined.isEmpty()) {
+            SearchCriteria relaxedContext = fallbackCriteria.withoutContext();
+            if (!relaxedContext.equals(fallbackCriteria)) {
+                List<ChatbotResultDto> retry = runSearch(relaxedContext, Collections.emptyMap(), Collections.emptyMap(), tagFilters, keywordFilters, limit);
+                if (!retry.isEmpty()) {
+                    combined = retry;
+                    fallbackCriteria = relaxedContext;
+                }
+            }
+        }
+
+        if (!combined.isEmpty()) {
+            assignCfIds(combined, fallbackCriteria, tagFilters, keywordFilters);
+            return combined;
+        }
+
+        // Final fallback: attempt search using the original user message only, minimal filters.
+        if (StringUtils.hasText(userMessage)) {
+            String fallbackSection = fallbackCriteria.sectionKey();
+            if (!StringUtils.hasText(fallbackSection)) {
+                fallbackSection = normalizeKey(extractSectionKey(userMessage));
+            }
+            if (!StringUtils.hasText(fallbackSection) && request != null) {
+                fallbackSection = slugify(request.getSectionKey());
+            }
+
+            SearchCriteria bareCriteria = new SearchCriteria(
+                    fallbackSection,
+                    null,
+                    null,
+                    null,
+                    null,
+                    fallbackCriteria.pageId(),
+                    userMessage
+            );
+            List<ChatbotResultDto> retry = runSearch(bareCriteria, Collections.emptyMap(), Collections.emptyMap(), tagFilters, keywordFilters, limit);
+            if (!retry.isEmpty()) {
+                assignCfIds(retry, bareCriteria, tagFilters, keywordFilters);
+                return retry;
+            }
+        }
+
+        return List.of();
     }
 
     private int determineLimit(ChatbotRequest request) {
@@ -204,6 +282,36 @@ public class ChatbotService {
         List<ChatbotResultDto> consolidatedResults = fetchConsolidatedResults(criteria, limit);
 
         return mergeResults(vectorResults, consolidatedResults, limit);
+    }
+
+    private List<ChatbotResultDto> trySectionDiscovery(SearchCriteria criteria,
+                                                       Map<String, Object> requestContext,
+                                                       Map<String, Object> interpretationContext,
+                                                       List<String> tags,
+                                                       List<String> keywords,
+                                                       int limit) {
+        if (!StringUtils.hasText(criteria.pageId())) {
+            return List.of();
+        }
+        LinkedHashSet<String> discoveredKeys = new LinkedHashSet<>();
+        for (ConsolidatedEnrichedSection section : consolidatedRepo.findByPageId(criteria.pageId(), limit * 4)) {
+            String sectionKey = extractSectionKeyFromSection(section);
+            if (StringUtils.hasText(sectionKey)) {
+                discoveredKeys.add(sectionKey);
+            }
+        }
+        if (discoveredKeys.isEmpty()) {
+            return List.of();
+        }
+        List<ChatbotResultDto> aggregated = new ArrayList<>();
+        for (String sectionKey : discoveredKeys) {
+            SearchCriteria sectionCriteria = criteria.withSectionKey(sectionKey);
+            aggregated.addAll(runSearch(sectionCriteria, requestContext, interpretationContext, tags, keywords, limit));
+            if (aggregated.size() >= limit) {
+                break;
+            }
+        }
+        return aggregated.size() > limit ? aggregated.subList(0, limit) : aggregated;
     }
 
     private List<ChatbotResultDto> fetchConsolidatedResults(SearchCriteria criteria, int limit) {
@@ -549,6 +657,9 @@ public class ChatbotService {
         String originalMessage = request != null ? request.getMessage() : null;
         String interpretedQuery = interpretation != null ? interpretation.rawQuery() : null;
         String message = StringUtils.hasText(interpretedQuery) ? interpretedQuery : originalMessage;
+        if (!StringUtils.hasText(message) && StringUtils.hasText(originalMessage)) {
+            message = originalMessage;
+        }
 
         SearchCriteriaBuilder builder = new SearchCriteriaBuilder()
                 .message(message);
@@ -556,6 +667,9 @@ public class ChatbotService {
         String interpretedSectionKey = normalizeKey(interpretation != null ? interpretation.sectionKey() : null);
         String requestSectionKey = slugify(request != null ? request.getSectionKey() : null);
         String inferredSection = extractSectionKey(originalMessage);
+        if (!StringUtils.hasText(interpretedSectionKey)) {
+            interpretedSectionKey = extractSectionKey(message);
+        }
         builder.sectionKey(firstNonBlank(interpretedSectionKey, requestSectionKey, inferredSection));
 
         String interpretedRole = normalizeRole(interpretation != null ? interpretation.role() : null);
@@ -740,6 +854,27 @@ public class ChatbotService {
             return list.isEmpty() ? null : list;
         }
         return value;
+    }
+
+    private String extractSectionKeyFromSection(ConsolidatedEnrichedSection section) {
+        if (section == null) {
+            return null;
+        }
+        Map<String, Object> context = section.getContext();
+        Map<String, Object> facets = context != null ? asMap(context.get("facets")) : null;
+        String fromFacets = normalizeKey(firstString(facets != null ? facets.get("sectionKey") : null));
+        if (StringUtils.hasText(fromFacets)) {
+            return fromFacets;
+        }
+        String fromEnvelope = normalizeKey(asStringFromContext(section, "envelope", "sectionKey"));
+        if (StringUtils.hasText(fromEnvelope)) {
+            return fromEnvelope;
+        }
+        String direct = normalizeKey(firstString(context != null ? context.get("sectionKey") : null));
+        if (StringUtils.hasText(direct)) {
+            return direct;
+        }
+        return normalizeKey(section.getOriginalFieldName());
     }
 
     private String extractSectionKey(String message) {
@@ -1259,6 +1394,32 @@ public class ChatbotService {
                 return this;
             }
             return new SearchCriteria(sectionKey, null, locale, language, country, pageId, message);
+        }
+
+        SearchCriteria withSectionKey(String newSectionKey) {
+            String normalized = StringUtils.hasText(newSectionKey) ? newSectionKey : null;
+            if (Objects.equals(sectionKey, normalized)) {
+                return this;
+            }
+            return new SearchCriteria(normalized, role, locale, language, country, pageId, message);
+        }
+
+        SearchCriteria withPageId(String newPageId) {
+            String normalized = StringUtils.hasText(newPageId) ? newPageId : null;
+            if (Objects.equals(pageId, normalized)) {
+                return this;
+            }
+            return new SearchCriteria(sectionKey, role, locale, language, country, normalized, message);
+        }
+
+        SearchCriteria withoutContext() {
+            if ((locale == null || locale.isBlank())
+                    && (language == null || language.isBlank())
+                    && (country == null || country.isBlank())
+                    && (pageId == null || pageId.isBlank())) {
+                return this;
+            }
+            return new SearchCriteria(sectionKey, role, null, null, null, null, message);
         }
     }
 

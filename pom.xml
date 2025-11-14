@@ -14,7 +14,7 @@
 	<name>springboot</name>
 	<description>Demo project for Spring Boot</description>
 	<properties>
-		<java.version>21</java.version>
+		<java.version>17</java.version>
 		<aws-sdk.version>2.31.47</aws-sdk.version>
 		<lombok.version>1.18.30</lombok.version>
 	</properties>
@@ -104,6 +104,12 @@
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-aop</artifactId>
+		</dependency>
+		<!-- SpringDoc OpenAPI for Swagger UI -->
+		<dependency>
+			<groupId>org.springdoc</groupId>
+			<artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+			<version>2.6.0</version>
 		</dependency>
 	</dependencies>
 	<build>
