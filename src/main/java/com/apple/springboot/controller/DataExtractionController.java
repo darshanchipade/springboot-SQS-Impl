@@ -81,8 +81,8 @@ public class DataExtractionController {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("File is empty");
         }
 
-        String sourceIdentifier = "file-upload-" + UUID.randomUUID().toString();
-        logger.info("Received POST request to process file. Assigned sourceIdentifier: {}", sourceIdentifier);
+        String sourceIdentifier = deriveSourceIdentifier(file);
+        logger.info("Received POST request to process file '{}' with assigned sourceIdentifier: {}", file.getOriginalFilename(), sourceIdentifier);
 
         try {
             String content = new String(file.getBytes());
@@ -105,6 +105,22 @@ public class DataExtractionController {
             logger.error("Error reading uploaded file", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Error reading file");
         }
+    }
+
+    private String deriveSourceIdentifier(MultipartFile file) {
+        String originalFilename = file.getOriginalFilename();
+        String sanitizedFilename = (originalFilename != null) ? originalFilename.trim() : "";
+        if (!sanitizedFilename.isEmpty()) {
+            sanitizedFilename = sanitizedFilename.replace("\\", "/");
+            int lastSlash = sanitizedFilename.lastIndexOf('/');
+            if (lastSlash >= 0 && lastSlash < sanitizedFilename.length() - 1) {
+                sanitizedFilename = sanitizedFilename.substring(lastSlash + 1);
+            }
+        }
+        if (sanitizedFilename.isEmpty()) {
+            sanitizedFilename = "File-upload-" + UUID.randomUUID();
+        }
+        return "file-upload:" + sanitizedFilename;
     }
 
     @Operation(
