@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.util.concurrent.RateLimiter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,6 +33,8 @@ public class EnrichmentProcessor {
     private final TextChunkingService textChunkingService;
     private final ContentChunkRepository contentChunkRepository;
     private final RateLimiter bedrockRateLimiter;
+    private final RateLimiter chatRateLimiter;
+    private final RateLimiter embedRateLimiter;
     private final EnrichmentPersistenceService persistenceService;
     private final AIResponseValidator aiResponseValidator;
     private final ObjectMapper objectMapper;
@@ -47,6 +50,8 @@ public class EnrichmentProcessor {
                                TextChunkingService textChunkingService,
                                ContentChunkRepository contentChunkRepository,
                                RateLimiter bedrockRateLimiter,
+                               @Qualifier("chatRateLimiter") RateLimiter chatRateLimiter,
+                               @Qualifier("embedRateLimiter") RateLimiter embedRateLimiter,
                                EnrichmentPersistenceService persistenceService,
                                AIResponseValidator aiResponseValidator,
                                ObjectMapper objectMapper,
@@ -58,6 +63,8 @@ public class EnrichmentProcessor {
         this.textChunkingService = textChunkingService;
         this.contentChunkRepository = contentChunkRepository;
         this.bedrockRateLimiter = bedrockRateLimiter;
+        this.chatRateLimiter = chatRateLimiter;
+        this.embedRateLimiter = embedRateLimiter;
         this.persistenceService = persistenceService;
         this.aiResponseValidator = aiResponseValidator;
         this.objectMapper = objectMapper;
@@ -66,7 +73,7 @@ public class EnrichmentProcessor {
 
     public void process(EnrichmentMessage message) {
         boolean terminal = false; // only true on success or non-throttle error
-        bedrockRateLimiter.acquire();
+        throttleFor(bedrockRateLimiter, chatRateLimiter);
 
         CleansedItemDetail itemDetail = message.getCleansedItemDetail();
         UUID cleansedDataStoreId = message.getCleansedDataStoreId();
@@ -75,7 +82,8 @@ public class EnrichmentProcessor {
                 .orElse(null);
 
         if (cleansedDataEntry == null) {
-            logger.error("Could not find CleansedDataStore with ID: {}. Cannot process item.", cleansedDataStoreId);
+            logger.error("Could not find CleansedDataStore with ID: {}. Skipping message but marking as completed to avoid blocking finalization.", cleansedDataStoreId);
+            completionService.itemCompleted(cleansedDataStoreId);
             return;
         }
 
@@ -135,7 +143,7 @@ public class EnrichmentProcessor {
             for (String chunkText : chunks) {
                 try {
                     // This call also needs to be rate-limited
-                    bedrockRateLimiter.acquire();
+                    throttleFor(bedrockRateLimiter, embedRateLimiter);
                     float[] vector = bedrockEnrichmentService.generateEmbedding(chunkText);
                     // Always create a new content chunk row for versioning
                     ContentChunk contentChunk = new ContentChunk();
@@ -153,6 +161,15 @@ public class EnrichmentProcessor {
             }
         }
         updateFinalCleansedDataStatus(cleansedDataEntry);
+    }
+
+    private void throttleFor(RateLimiter... limiters) {
+        if (limiters == null) return;
+        for (RateLimiter limiter : limiters) {
+            if (limiter != null) {
+                limiter.acquire();
+            }
+        }
     }
 
     private void updateFinalCleansedDataStatus(CleansedDataStore cleansedDataEntry) {
