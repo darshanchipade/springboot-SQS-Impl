@@ -59,4 +59,8 @@ public class EnrichmentCompletionService {
 
         return false;
     }
+
+    public boolean isTracking(UUID cleansedDataStoreId) {
+        return completionCounters.containsKey(cleansedDataStoreId);
+    }
 }
