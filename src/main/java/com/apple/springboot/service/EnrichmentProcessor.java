@@ -75,7 +75,8 @@ public class EnrichmentProcessor {
                 .orElse(null);
 
         if (cleansedDataEntry == null) {
-            logger.error("Could not find CleansedDataStore with ID: {}. Cannot process item.", cleansedDataStoreId);
+            logger.error("Could not find CleansedDataStore with ID: {}. Skipping message but marking as completed to avoid blocking finalization.", cleansedDataStoreId);
+            completionService.itemCompleted(cleansedDataStoreId);
             return;
         }
 
