@@ -38,6 +38,7 @@ public class DataIngestionService {
     // Treat these as extractable content fields
     private static final Set<String> CONTENT_FIELD_KEYS = Set.of("copy", "disclaimers", "text", "url");
     private static final Set<String> ICON_NODE_KEYS = Set.of("icon");
+    private static final Set<String> ICON_META_KEYS = Set.of("_path", "_uri_path");
     private static final Pattern LOCALE_PATTERN = Pattern.compile("(?<=/)([a-z]{2})[-_]([A-Z]{2})(?=/|$)");
     private static final String USAGE_REF_DELIM = " ::ref:: ";
     private static final Map<String, String> EVENT_KEYWORDS = Map.of(
@@ -784,7 +785,7 @@ public class DataIngestionService {
         if (iconNode == null || iconNode.isNull()) return;
         iconNode.fields().forEachRemaining(entry -> {
             String key = entry.getKey();
-            if (key.startsWith("_")) return;
+            if (key.startsWith("_") && !ICON_META_KEYS.contains(key)) return;
             JsonNode value = entry.getValue();
             String facetKey = (prefix == null || prefix.isBlank()) ? key : prefix + "." + key;
             if (value.isValueNode()) {
