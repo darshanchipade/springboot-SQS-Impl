@@ -67,6 +67,8 @@ public class EnrichmentPipelineService {
 
         // Convert and deduplicate by (sourcePath, originalFieldName)
         List<CleansedItemDetail> rawItems = convertMapsToCleansedItemDetails(maps);
+        logger.info("Converted {} cleansed entries into {} unique (sourcePath,field) pairs for CleansedDataStore ID {}.",
+                maps.size(), rawItems.size(), cleansedDataStoreId);
         List<CleansedItemDetail> itemsToEnrich = rawItems.stream()
                 .collect(Collectors.collectingAndThen(
                         Collectors.toMap(
@@ -88,6 +90,9 @@ public class EnrichmentPipelineService {
                                 itemDetail.cleansedContent))
                 .collect(Collectors.toList());
 
+        logger.info("After change-detection filtering, {} items remain for enrichment (CleansedDataStore ID {}).",
+                itemsToQueue.size(), cleansedDataStoreId);
+
         if (itemsToQueue.isEmpty()) {
             logger.info("No items require enrichment for CleansedDataStore ID: {}. Marking as ENRICHED_NO_ITEMS_TO_PROCESS.", cleansedDataStoreId);
             cleansedDataEntry.setStatus("ENRICHED_NO_ITEMS_TO_PROCESS");
@@ -96,6 +101,7 @@ public class EnrichmentPipelineService {
         }
 
         // Track completion on the ACTUAL number queued
+        logger.info("Starting completion tracking for CleansedDataStore ID {} with {} queued items.", cleansedDataStoreId, itemsToQueue.size());
         completionService.startTracking(cleansedDataStoreId, itemsToQueue.size());
 
         // Queue items

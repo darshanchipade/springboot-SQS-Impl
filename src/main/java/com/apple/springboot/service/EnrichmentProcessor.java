@@ -126,6 +126,8 @@ public class EnrichmentProcessor {
                     logger.info("All queued items complete for {}. Running finalization.", cleansedDataEntry.getId());
                     runFinalizationSteps(cleansedDataEntry);
                 } else if (!completionService.isTracking(cleansedDataEntry.getId())) {
+                    logger.warn("Falling back to database completion check for CleansedDataStore ID {} (tracking missing).",
+                            cleansedDataEntry.getId());
                     // Lost in-memory tracking (e.g., service restart). Fall back to DB counts.
                     checkCompletion(cleansedDataEntry);
                 }

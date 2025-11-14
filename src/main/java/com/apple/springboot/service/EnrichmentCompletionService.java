@@ -61,6 +61,10 @@ public class EnrichmentCompletionService {
     }
 
     public boolean isTracking(UUID cleansedDataStoreId) {
-        return completionCounters.containsKey(cleansedDataStoreId);
+        boolean tracking = completionCounters.containsKey(cleansedDataStoreId);
+        if (!tracking) {
+            logger.warn("Completion tracking absent for CleansedDataStore ID {} when queried.", cleansedDataStoreId);
+        }
+        return tracking;
     }
 }
