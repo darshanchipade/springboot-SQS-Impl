@@ -1,15 +1,29 @@
 package com.apple.springboot.model;
 
+import io.swagger.v3.oas.annotations.media.Schema;
+
 import java.util.List;
 import java.util.Map;
 
+@Schema(description = "Request model for vector search with optional filters")
 public class SearchRequest {
+    @Schema(description = "Search query string", required = true, example = "iPad setup")
     private String query;
+    
+    @Schema(description = "Optional list of tag filters")
     private List<String> tags;
+    
+    @Schema(description = "Optional list of keyword filters")
     private List<String> keywords;
+    
+    @Schema(description = "Optional context filters as key-value pairs")
     private Map<String, Object> context;
+    
+    @Schema(description = "Optional original field name filter", example = "copy")
     private String original_field_name;
-    private  String sectionFilter;
+    
+    @Schema(description = "Optional section filter")
+    private String sectionFilter;
 
     // Getters and setters
     public String getQuery() { return query; }

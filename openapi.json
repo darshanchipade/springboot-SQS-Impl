@@ -1,0 +1,534 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "Apple Content Lake API",
+    "description": "REST API documentation for Apple Content Lake. This API provides endpoints for chatbot queries, data extraction, enrichment, and vector search operations.",
+    "version": "0.0.1-SNAPSHOT",
+    "contact": {
+      "name": "API Support",
+      "email": "support@example.com"
+    },
+    "license": {
+      "name": "Apache 2.0",
+      "url": "https://www.apache.org/licenses/LICENSE-2.0.html"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8081",
+      "description": "Local development server"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Chatbot",
+      "description": "Chatbot API endpoints for AI-driven queries and search operations"
+    },
+    {
+      "name": "Data Extraction",
+      "description": "Data extraction, cleansing, enrichment, and storage API endpoints"
+    },
+    {
+      "name": "Search",
+      "description": "Vector search and refinement API endpoints"
+    }
+  ],
+  "paths": {
+    "/api/chatbot/query": {
+      "post": {
+        "tags": ["Chatbot"],
+        "summary": "AI-driven chatbot query",
+        "description": "Route existing clients to the AI-driven flow using interactive_search_prompt.txt. Performs an AI-powered search based on the user's message and optional filters.",
+        "operationId": "chat",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatbotRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successfully retrieved search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ChatbotResultDto"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - message is null or empty"
+          }
+        }
+      }
+    },
+    "/api/chatbot/ai-search": {
+      "post": {
+        "tags": ["Chatbot"],
+        "summary": "Explicit AI search endpoint",
+        "description": "Explicit AI endpoint with the same behavior as /query. Performs an AI-powered search based on the user's message and optional filters.",
+        "operationId": "aiSearch",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatbotRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successfully retrieved search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ChatbotResultDto"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - message is null or empty"
+          }
+        }
+      }
+    },
+    "/api/chatbot/query-legacy": {
+      "post": {
+        "tags": ["Chatbot"],
+        "summary": "Legacy chatbot query",
+        "description": "Optional legacy behavior endpoint for comparison purposes. Uses the original chatbot service implementation.",
+        "operationId": "legacy",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatbotRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successfully retrieved search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ChatbotResultDto"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - message is null or empty"
+          }
+        }
+      }
+    },
+    "/api/extract-cleanse-enrich-and-store": {
+      "get": {
+        "tags": ["Data Extraction"],
+        "summary": "Extract, cleanse, enrich and store data",
+        "description": "Extracts data from a source URI (S3 or classpath), cleanses it, and triggers enrichment. If sourceUri is not provided, uses the default configured path. Enrichment is processed asynchronously in the background.",
+        "operationId": "extractCleanseEnrichAndStore",
+        "parameters": [
+          {
+            "name": "sourceUri",
+            "in": "query",
+            "description": "Source URI (S3 URI or classpath path). If not provided, uses default configured path.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Request accepted - enrichment processing initiated in background"
+          },
+          "200": {
+            "description": "Source processed successfully but no content extracted for enrichment"
+          },
+          "400": {
+            "description": "Bad request - file I/O error or invalid argument"
+          },
+          "404": {
+            "description": "Source file not found"
+          },
+          "422": {
+            "description": "Unprocessable entity - ingestion/cleansing failed"
+          },
+          "417": {
+            "description": "Expectation failed - cannot proceed to enrichment"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/api/ingest-json-payload": {
+      "post": {
+        "tags": ["Data Extraction"],
+        "summary": "Ingest JSON payload",
+        "description": "Ingests and processes a JSON payload directly. The payload is cleansed and enrichment is triggered asynchronously in the background.",
+        "operationId": "ingestJsonPayload",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "string",
+                "description": "JSON payload to ingest and process"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Request accepted - enrichment processing initiated in background"
+          },
+          "200": {
+            "description": "Source processed successfully but no content extracted for enrichment"
+          },
+          "400": {
+            "description": "Bad request - JSON payload is empty or invalid"
+          },
+          "422": {
+            "description": "Unprocessable entity - ingestion/cleansing failed"
+          },
+          "417": {
+            "description": "Expectation failed - cannot proceed to enrichment"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/api/cleansed-data-status/{id}": {
+      "get": {
+        "tags": ["Data Extraction"],
+        "summary": "Get cleansed data status",
+        "description": "Retrieves the status of a cleansed data entry by its ID. Returns the status string or 'NOT_FOUND' if the ID doesn't exist.",
+        "operationId": "getStatus",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "UUID of the cleansed data entry",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Status retrieved successfully",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/refine": {
+      "get": {
+        "tags": ["Search"],
+        "summary": "Get refinement chips for a query",
+        "description": "Retrieves refinement chips (suggestions) based on the provided query. These chips can be used to refine search queries.",
+        "operationId": "getRefinementChips",
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "description": "Search query to generate refinement chips for",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successfully retrieved refinement chips",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RefinementChip"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/api/search": {
+      "post": {
+        "tags": ["Search"],
+        "summary": "Vector search endpoint",
+        "description": "Performs a vector search based on the provided query and filters. Returns the top matching content chunks with their metadata. Supports filtering by tags, keywords, original field name, and context.",
+        "operationId": "search",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successfully retrieved search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SearchResultDto"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ChatbotRequest": {
+        "type": "object",
+        "description": "Request model for chatbot queries with optional filters",
+        "required": ["message"],
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "Full user message/query",
+            "example": "How do I set up my iPad?"
+          },
+          "sectionKey": {
+            "type": "string",
+            "description": "Optional explicit section key",
+            "example": "video-section-header"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Optional maximum number of results to return",
+            "example": 10
+          },
+          "original_field_name": {
+            "type": "string",
+            "description": "Optional role filter (original field name)",
+            "example": "copy"
+          },
+          "tags": {
+            "type": "array",
+            "description": "Optional list of tag filters",
+            "items": {
+              "type": "string"
+            }
+          },
+          "keywords": {
+            "type": "array",
+            "description": "Optional list of keyword filters",
+            "items": {
+              "type": "string"
+            }
+          },
+          "context": {
+            "type": "object",
+            "description": "Optional JSONB context filters",
+            "additionalProperties": true
+          }
+        }
+      },
+      "ChatbotResultDto": {
+        "type": "object",
+        "description": "Chatbot search result containing matched content and metadata",
+        "properties": {
+          "section": {
+            "type": "string",
+            "description": "Section identifier",
+            "example": "video-section-header"
+          },
+          "cf_id": {
+            "type": "string",
+            "description": "Content fragment ID",
+            "example": "cf1"
+          },
+          "section_path": {
+            "type": "string",
+            "description": "Path to the section",
+            "example": "/en_US/ipad"
+          },
+          "section_uri": {
+            "type": "string",
+            "description": "URI of the section",
+            "example": "https://example.com/section"
+          },
+          "cleansed_text": {
+            "type": "string",
+            "description": "Cleansed text content of the matched section",
+            "example": "Learn how to set up your iPad"
+          },
+          "page_id": {
+            "type": "string",
+            "description": "Derived from path/locale segment (e.g., ipad)"
+          },
+          "tenant": {
+            "type": "string",
+            "description": "Derived from path (e.g., applecom-cms)"
+          },
+          "locale": {
+            "type": "string",
+            "description": "Locale (e.g., en_US)",
+            "example": "en_US"
+          },
+          "country": {
+            "type": "string"
+          },
+          "language": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string",
+            "description": "Alias for cleansed_text"
+          },
+          "source": {
+            "type": "string",
+            "description": "Source: 'consolidated_enriched_sections' or 'content_chunks'"
+          },
+          "content_role": {
+            "type": "string",
+            "description": "Maps from original_field_name"
+          },
+          "last_modified": {
+            "type": "string",
+            "description": "ISO timestamp if available"
+          },
+          "match_terms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "SearchRequest": {
+        "type": "object",
+        "description": "Request model for vector search with optional filters",
+        "required": ["query"],
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Search query string",
+            "example": "iPad setup"
+          },
+          "tags": {
+            "type": "array",
+            "description": "Optional list of tag filters",
+            "items": {
+              "type": "string"
+            }
+          },
+          "keywords": {
+            "type": "array",
+            "description": "Optional list of keyword filters",
+            "items": {
+              "type": "string"
+            }
+          },
+          "context": {
+            "type": "object",
+            "description": "Optional context filters as key-value pairs",
+            "additionalProperties": true
+          },
+          "original_field_name": {
+            "type": "string",
+            "description": "Optional original field name filter",
+            "example": "copy"
+          },
+          "sectionFilter": {
+            "type": "string",
+            "description": "Optional section filter"
+          }
+        }
+      },
+      "SearchResultDto": {
+        "type": "object",
+        "description": "Search result containing matched content and metadata",
+        "properties": {
+          "cleansedText": {
+            "type": "string",
+            "description": "Cleansed text content of the matched result",
+            "example": "Learn how to set up your iPad"
+          },
+          "sourceFieldName": {
+            "type": "string",
+            "description": "Source field name where the content was found",
+            "example": "copy"
+          },
+          "sectionPath": {
+            "type": "string",
+            "description": "Path to the section containing the result",
+            "example": "/en_US/ipad"
+          }
+        }
+      },
+      "RefinementChip": {
+        "type": "object",
+        "description": "Refinement chip suggestion",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "The chip value"
+          },
+          "type": {
+            "type": "string",
+            "description": "Chip type (e.g., 'Tag', 'Keyword', 'Context:eventType')"
+          },
+          "count": {
+            "type": "integer",
+            "description": "Number of matches for this chip"
+          }
+        }
+      }
+    }
+  }
+}
+
