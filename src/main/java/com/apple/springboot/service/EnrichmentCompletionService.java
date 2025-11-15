@@ -14,6 +14,7 @@ public class EnrichmentCompletionService {
     private static final Logger logger = LoggerFactory.getLogger(EnrichmentCompletionService.class);
 
     private final ConcurrentHashMap<UUID, AtomicInteger> completionCounters = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, Integer> expectedCounters = new ConcurrentHashMap<>();
 
     /**
      * Initializes the completion counter for a new enrichment job.
@@ -28,6 +29,7 @@ public class EnrichmentCompletionService {
             return;
         }
         completionCounters.put(cleansedDataStoreId, new AtomicInteger(totalItems));
+        expectedCounters.put(cleansedDataStoreId, totalItems);
         logger.info("Started tracking completion for CleansedDataStore ID {}. Expecting {} items.", cleansedDataStoreId, totalItems);
     }
 
@@ -50,6 +52,7 @@ public class EnrichmentCompletionService {
         if (remaining == 0) {
             logger.info("All items for CleansedDataStore ID {} have been processed.", cleansedDataStoreId);
             completionCounters.remove(cleansedDataStoreId); // Clean up the map
+            expectedCounters.remove(cleansedDataStoreId);
             return true;
         }
 
@@ -59,7 +62,32 @@ public class EnrichmentCompletionService {
 
         return false;
     }
+
     public boolean isTracking(UUID cleansedDataStoreId) {
-        return completionCounters.containsKey(cleansedDataStoreId);
+        boolean tracking = completionCounters.containsKey(cleansedDataStoreId);
+        if (!tracking) {
+            logger.warn("Completion tracking absent for CleansedDataStore ID {} when queried.", cleansedDataStoreId);
+        }
+        return tracking;
+    }
+
+    public int getRemainingCount(UUID cleansedDataStoreId) {
+        AtomicInteger counter = completionCounters.get(cleansedDataStoreId);
+        return counter != null ? counter.get() : -1;
+    }
+
+    public int getExpectedCount(UUID cleansedDataStoreId) {
+        return expectedCounters.getOrDefault(cleansedDataStoreId, -1);
+    }
+
+    public boolean forceComplete(UUID cleansedDataStoreId) {
+        AtomicInteger remaining = completionCounters.remove(cleansedDataStoreId);
+        expectedCounters.remove(cleansedDataStoreId);
+        if (remaining != null) {
+            logger.warn("Force-completing tracking for CleansedDataStore ID {} with {} items still recorded as remaining.",
+                    cleansedDataStoreId, remaining.get());
+            return true;
+        }
+        return false;
     }
 }

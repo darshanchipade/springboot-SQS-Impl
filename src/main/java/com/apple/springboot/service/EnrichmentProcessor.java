@@ -125,6 +125,27 @@ public class EnrichmentProcessor {
                 if (allDone) {
                     logger.info("All queued items complete for {}. Running finalization.", cleansedDataEntry.getId());
                     runFinalizationSteps(cleansedDataEntry);
+                } else if (!completionService.isTracking(cleansedDataEntry.getId())) {
+                    logger.warn("Falling back to database completion check for CleansedDataStore ID {} (tracking missing).",
+                            cleansedDataEntry.getId());
+                    // Lost in-memory tracking (e.g., service restart). Fall back to DB counts.
+                    checkCompletion(cleansedDataEntry);
+                } else {
+                    int remaining = completionService.getRemainingCount(cleansedDataEntry.getId());
+                    int expected = completionService.getExpectedCount(cleansedDataEntry.getId());
+                    long processed = enrichedContentElementRepository.countByCleansedDataId(cleansedDataEntry.getId());
+                    logger.debug("Completion tracker active for {}. {} items remaining per counter; {} expected; {} rows currently persisted.",
+                            cleansedDataEntry.getId(),
+                            remaining,
+                            expected,
+                            processed);
+                    if (expected > 0 && processed >= expected && remaining > 0 && !isFinalStatus(cleansedDataEntry)) {
+                        logger.warn("Detected processed={} >= expected={} while counter still reports {} remaining for {}. Forcing finalization.",
+                                processed, expected, remaining, cleansedDataEntry.getId());
+                        if (completionService.forceComplete(cleansedDataEntry.getId())) {
+                            runFinalizationSteps(cleansedDataEntry);
+                        }
+                    }
                 }
             } catch (Exception ex) {
                 logger.error("Completion tracking failed for {}: {}", cleansedDataEntry.getId(), ex.getMessage(), ex);
@@ -203,5 +224,10 @@ public class EnrichmentProcessor {
             logger.info("All items for CleansedDataStore ID {} processed. Running finalization.", cleansedDataEntry.getId());
             runFinalizationSteps(cleansedDataEntry);
         }
+    }
+
+    private boolean isFinalStatus(CleansedDataStore cleansedDataEntry) {
+        String status = cleansedDataEntry.getStatus();
+        return status != null && (status.contains("ENRICHED_COMPLETE") || status.contains("PARTIALLY_ENRICHED"));
     }
 }
