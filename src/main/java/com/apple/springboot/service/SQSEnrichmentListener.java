@@ -36,14 +36,18 @@ public class SQSEnrichmentListener {
     @Value("${aws.sqs.listener.batch-size:5}")
     private int batchSize;
 
+    private final java.util.concurrent.Semaphore inFlightLimiter;
+
     public SQSEnrichmentListener(SqsClient sqsClient,
                                  ObjectMapper objectMapper,
                                  EnrichmentProcessor enrichmentProcessor,
-                                 @Qualifier("sqsMessageProcessorExecutor") TaskExecutor taskExecutor) {
+                                 @Qualifier("sqsMessageProcessorExecutor") TaskExecutor taskExecutor,
+                                 @Value("${app.enrichment.max-concurrent-messages:4}") int maxConcurrentMessages) {
         this.sqsClient = sqsClient;
         this.objectMapper = objectMapper;
         this.enrichmentProcessor = enrichmentProcessor;
         this.taskExecutor = taskExecutor;
+        this.inFlightLimiter = new java.util.concurrent.Semaphore(Math.max(1, maxConcurrentMessages));
     }
 
     @Scheduled(fixedDelay = 2000)
@@ -67,12 +71,15 @@ public class SQSEnrichmentListener {
             logger.debug("Polled SQS and received {} messages (batch size {}).", messages.size(), batch);
 
             for (Message message : messages) {
+                if (!inFlightLimiter.tryAcquire()) {
+                    logger.debug("In-flight limit reached; stopping dispatch for this cycle.");
+                    break;
+                }
                 try {
-                    taskExecutor.execute(() -> processMessage(message));
+                    taskExecutor.execute(() -> processMessageWithRelease(message));
                 } catch (TaskRejectedException tre) {
-                    // Fallback: process inline to avoid losing the task
                     logger.warn("Executor saturated; processing message {} inline.", message.messageId());
-                    processMessage(message);
+                    processMessageWithRelease(message);
                 }
             }
         } catch (Exception e) {
@@ -90,6 +97,14 @@ public class SQSEnrichmentListener {
             return poolFull && queueFull;
         }
         return false;
+    }
+
+    private void processMessageWithRelease(Message message) {
+        try {
+            processMessage(message);
+        } finally {
+            inFlightLimiter.release();
+        }
     }
 
     private void processMessage(Message message) {
