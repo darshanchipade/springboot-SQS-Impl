@@ -33,6 +33,9 @@ public class SQSEnrichmentListener {
     @Value("${aws.sqs.queue.url}")
     private String queueUrl;
 
+    @Value("${aws.sqs.listener.batch-size:5}")
+    private int batchSize;
+
     public SQSEnrichmentListener(SqsClient sqsClient,
                                  ObjectMapper objectMapper,
                                  EnrichmentProcessor enrichmentProcessor,
@@ -46,21 +49,22 @@ public class SQSEnrichmentListener {
     @Scheduled(fixedDelay = 2000)
     public void pollQueue() {
         try {
-            if (isWorkerBusy()) {
-                logger.debug("Worker busy; skipping this poll.");
+            if (isWorkerSaturated()) {
+                logger.debug("Worker pool saturated; skipping this poll.");
                 return;
             }
 
+            int batch = Math.max(1, Math.min(batchSize, 10));
             ReceiveMessageRequest receiveMessageRequest = ReceiveMessageRequest.builder()
                     .queueUrl(queueUrl)
-                    .maxNumberOfMessages(1)
+                    .maxNumberOfMessages(batch)
                     .waitTimeSeconds(20)
                     .visibilityTimeout(180)
                     .attributeNamesWithStrings("ApproximateReceiveCount")
                     .build();
 
             List<Message> messages = sqsClient.receiveMessage(receiveMessageRequest).messages();
-            logger.debug("Polled SQS and received {} messages.", messages.size());
+            logger.debug("Polled SQS and received {} messages (batch size {}).", messages.size(), batch);
 
             for (Message message : messages) {
                 try {
@@ -76,11 +80,14 @@ public class SQSEnrichmentListener {
         }
     }
 
-    private boolean isWorkerBusy() {
+    private boolean isWorkerSaturated() {
         if (taskExecutor instanceof ThreadPoolTaskExecutor ex) {
-            // With pool size 1, if active > 0 or queue not empty, we’re busy
-            boolean busy = ex.getActiveCount() > 0 || ex.getThreadPoolExecutor().getQueue().size() > 0;
-            return busy;
+            int active = ex.getActiveCount();
+            int maxPool = ex.getMaxPoolSize();
+            int remainingCapacity = ex.getThreadPoolExecutor().getQueue().remainingCapacity();
+            boolean poolFull = active >= maxPool;
+            boolean queueFull = remainingCapacity <= 0;
+            return poolFull && queueFull;
         }
         return false;
     }
