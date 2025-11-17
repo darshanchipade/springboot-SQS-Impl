@@ -72,7 +72,7 @@ public class EnrichmentProcessor {
     }
 
     public void process(EnrichmentMessage message) {
-        boolean terminal = false; // only true on success or non-throttle error
+        boolean shouldRecordCompletion = true;
         throttleFor(bedrockRateLimiter, chatRateLimiter);
 
         CleansedItemDetail itemDetail = message.getCleansedItemDetail();
@@ -115,40 +115,45 @@ public class EnrichmentProcessor {
                 }
             }
         } catch (ThrottledException te) {
-            // DO NOT rethrow; persist error so we complete and consolidate
-            persistenceService.saveErrorEnrichedElement(itemDetail, cleansedDataEntry, "ERROR_ENRICHMENT_FAILED", "Throttled after retries");
+            shouldRecordCompletion = false;
+            logger.warn("Bedrock throttled for item {}::{}, re-queueing message.", itemDetail.sourcePath, itemDetail.originalFieldName);
+            throw te;
         } catch (Exception e) {
             persistenceService.saveErrorEnrichedElement(itemDetail, cleansedDataEntry, "ERROR_UNEXPECTED", e.getMessage());
         } finally {
-            try {
-                boolean allDone = completionService.itemCompleted(cleansedDataEntry.getId());
-                if (allDone) {
-                    logger.info("All queued items complete for {}. Running finalization.", cleansedDataEntry.getId());
-                    runFinalizationSteps(cleansedDataEntry);
-                } else if (!completionService.isTracking(cleansedDataEntry.getId())) {
-                    logger.warn("Falling back to database completion check for CleansedDataStore ID {} (tracking missing).",
-                            cleansedDataEntry.getId());
-                    // Lost in-memory tracking (e.g., service restart). Fall back to DB counts.
-                    checkCompletion(cleansedDataEntry);
-                } else {
-                    int remaining = completionService.getRemainingCount(cleansedDataEntry.getId());
-                    int expected = completionService.getExpectedCount(cleansedDataEntry.getId());
-                    long processed = enrichedContentElementRepository.countByCleansedDataId(cleansedDataEntry.getId());
-                    logger.debug("Completion tracker active for {}. {} items remaining per counter; {} expected; {} rows currently persisted.",
-                            cleansedDataEntry.getId(),
-                            remaining,
-                            expected,
-                            processed);
-                    if (expected > 0 && processed >= expected && remaining > 0 && !isFinalStatus(cleansedDataEntry)) {
-                        logger.warn("Detected processed={} >= expected={} while counter still reports {} remaining for {}. Forcing finalization.",
-                                processed, expected, remaining, cleansedDataEntry.getId());
-                        if (completionService.forceComplete(cleansedDataEntry.getId())) {
-                            runFinalizationSteps(cleansedDataEntry);
+            if (!shouldRecordCompletion) {
+                logger.debug("Skipping completion bookkeeping for {} due to throttling retry.", cleansedDataEntry.getId());
+            } else {
+                try {
+                    boolean allDone = completionService.itemCompleted(cleansedDataEntry.getId());
+                    if (allDone) {
+                        logger.info("All queued items complete for {}. Running finalization.", cleansedDataEntry.getId());
+                        runFinalizationSteps(cleansedDataEntry);
+                    } else if (!completionService.isTracking(cleansedDataEntry.getId())) {
+                        logger.warn("Falling back to database completion check for CleansedDataStore ID {} (tracking missing).",
+                                cleansedDataEntry.getId());
+                        // Lost in-memory tracking (e.g., service restart). Fall back to DB counts.
+                        checkCompletion(cleansedDataEntry);
+                    } else {
+                        int remaining = completionService.getRemainingCount(cleansedDataEntry.getId());
+                        int expected = completionService.getExpectedCount(cleansedDataEntry.getId());
+                        long processed = enrichedContentElementRepository.countByCleansedDataId(cleansedDataEntry.getId());
+                        logger.debug("Completion tracker active for {}. {} items remaining per counter; {} expected; {} rows currently persisted.",
+                                cleansedDataEntry.getId(),
+                                remaining,
+                                expected,
+                                processed);
+                        if (expected > 0 && processed >= expected && remaining > 0 && !isFinalStatus(cleansedDataEntry)) {
+                            logger.warn("Detected processed={} >= expected={} while counter still reports {} remaining for {}. Forcing finalization.",
+                                    processed, expected, remaining, cleansedDataEntry.getId());
+                            if (completionService.forceComplete(cleansedDataEntry.getId())) {
+                                runFinalizationSteps(cleansedDataEntry);
+                            }
                         }
                     }
+                } catch (Exception ex) {
+                    logger.error("Completion tracking failed for {}: {}", cleansedDataEntry.getId(), ex.getMessage(), ex);
                 }
-            } catch (Exception ex) {
-                logger.error("Completion tracking failed for {}: {}", cleansedDataEntry.getId(), ex.getMessage(), ex);
             }
         }
     }

@@ -9,16 +9,23 @@ import java.util.List;
 @Service
 public class TextChunkingService {
 
+//    public List<String> chunkIfNeeded(String text) {
+//        if (text == null || text.trim().isEmpty()) return List.of();
+//
+//        if (text.length() <= ChunkingConfig.LENGTH_THRESHOLD) {
+//            return List.of(text.trim()); // short enough to embed directly
+//        } else {
+//            return chunkBySentences(text);
+//        }
+//    }
+
     public List<String> chunkIfNeeded(String text) {
-        if (text == null || text.trim().isEmpty()) return List.of();
-
-        if (text.length() <= ChunkingConfig.LENGTH_THRESHOLD) {
-            return List.of(text.trim()); // short enough to embed directly
-        } else {
-            return chunkBySentences(text);
+        if (text == null || text.trim().isEmpty()) {
+            return List.of();
         }
+        // Downstream search can handle full sections, so we skip sentence-level chunking.
+        return List.of(text.trim());
     }
-
     private List<String> chunkBySentences(String text) {
         String[] rawSentences = text.split("(?<=[.!?])\\s+");
         List<String> sentences = new ArrayList<>();
