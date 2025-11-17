@@ -787,7 +787,9 @@ public class DataIngestionService {
     }
 
     private boolean isImageNodeKey(String key) {
-        return key != null && key.toLowerCase().contains("image");
+        if (key == null) return false;
+        String lower = key.toLowerCase();
+        return lower.contains("image") || lower.contains("backgroundimage");
     }
 
     private void enrichFacetsWithIconProperties(JsonNode iconNode, String prefix, Facets targetFacets) {
