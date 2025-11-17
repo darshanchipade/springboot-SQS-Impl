@@ -68,4 +68,7 @@ public class ChatbotResultDto {
 
     @JsonProperty("match_terms")
     private java.util.List<String> matchTerms;
+
+    @JsonProperty("context")
+    private java.util.Map<String, Object> context;
 }

@@ -493,6 +493,7 @@ public class ChatbotService {
         dto.setSectionPath(section.getSectionPath());
         dto.setSectionUri(section.getSectionUri());
         dto.setCleansedText(section.getCleansedText());
+        dto.setContext(section.getContext());
         dto.setContentRole(resolveRole(section));
         dto.setSource(source);
         dto.setLastModified(formatTimestamp(section.getSavedAt()));
