@@ -39,6 +39,9 @@ public class DataIngestionService {
     private static final Set<String> CONTENT_FIELD_KEYS = Set.of("copy", "disclaimers", "text", "url");
     private static final Set<String> ICON_NODE_KEYS = Set.of("icon");
     private static final Set<String> ICON_META_KEYS = Set.of("_path", "_uri_path");
+    private static final Set<String> IMAGE_META_KEYS = Set.of(
+            "_path", "_model", "_id", "_uri1x_path", "_uri2x_path", "_uri_path"
+    );
     private static final Pattern LOCALE_PATTERN = Pattern.compile("(?<=/)([a-z]{2})[-_]([A-Z]{2})(?=/|$)");
     private static final String USAGE_REF_DELIM = " ::ref:: ";
     private static final Map<String, String> EVENT_KEYWORDS = Map.of(
@@ -611,18 +614,20 @@ public class DataIngestionService {
     private Facets buildCurrentFacets(JsonNode currentNode, Facets parentFacets) {
         Facets currentFacets = new Facets();
         currentFacets.putAll(parentFacets);
-        currentFacets.remove("copy"); // Remove generic copy if it exists
-        currentFacets.remove("text"); // Avoid duplicating extracted text
-        currentFacets.remove("url");  // Avoid duplicating extracted url text
-        currentNode.fields().forEachRemaining(entry -> {
-            JsonNode value = entry.getValue();
-            String key = entry.getKey();
-            if (value.isValueNode() && !key.startsWith("_")) {
-                currentFacets.put(key, value.asText());
-            } else if (ICON_NODE_KEYS.contains(key) && value.isObject()) {
-                enrichFacetsWithIconProperties(value, key, currentFacets);
-            }
-        });
+            currentFacets.remove("copy"); // Remove generic copy if it exists
+            currentFacets.remove("text"); // Avoid duplicating extracted text
+            currentFacets.remove("url");  // Avoid duplicating extracted url text
+            currentNode.fields().forEachRemaining(entry -> {
+                JsonNode value = entry.getValue();
+                String key = entry.getKey();
+                if (value.isValueNode() && !key.startsWith("_")) {
+                    currentFacets.put(key, value.asText());
+                } else if (ICON_NODE_KEYS.contains(key) && value.isObject()) {
+                    enrichFacetsWithIconProperties(value, key, currentFacets);
+                } else if (isImageNodeKey(key) && value.isObject()) {
+                    enrichFacetsWithImageProperties(value, key, currentFacets);
+                }
+            });
         return currentFacets;
     }
 
@@ -781,6 +786,10 @@ public class DataIngestionService {
         return cleansed;
     }
 
+    private boolean isImageNodeKey(String key) {
+        return key != null && key.toLowerCase().contains("image");
+    }
+
     private void enrichFacetsWithIconProperties(JsonNode iconNode, String prefix, Facets targetFacets) {
         if (iconNode == null || iconNode.isNull()) return;
         iconNode.fields().forEachRemaining(entry -> {
@@ -792,6 +801,32 @@ public class DataIngestionService {
                 targetFacets.put(facetKey, value.asText());
             } else if (value.isObject()) {
                 enrichFacetsWithIconProperties(value, facetKey, targetFacets);
+            }
+        });
+    }
+
+    private void enrichFacetsWithImageProperties(JsonNode imageNode, String prefix, Facets targetFacets) {
+        if (imageNode == null || imageNode.isNull()) return;
+        imageNode.fields().forEachRemaining(entry -> {
+            String key = entry.getKey();
+            if (key.startsWith("_") && !IMAGE_META_KEYS.contains(key)) return;
+            JsonNode value = entry.getValue();
+            String facetKey = (prefix == null || prefix.isBlank()) ? key : prefix + "." + key;
+            if (value.isValueNode()) {
+                targetFacets.put(facetKey, value.asText());
+            } else if (value.isObject()) {
+                enrichFacetsWithImageProperties(value, facetKey, targetFacets);
+            } else if (value.isArray()) {
+                int idx = 0;
+                for (JsonNode element : value) {
+                    String arrayKey = facetKey + "[" + idx + "]";
+                    if (element.isValueNode()) {
+                        targetFacets.put(arrayKey, element.asText());
+                    } else if (element.isObject()) {
+                        enrichFacetsWithImageProperties(element, arrayKey, targetFacets);
+                    }
+                    idx++;
+                }
             }
         });
     }
