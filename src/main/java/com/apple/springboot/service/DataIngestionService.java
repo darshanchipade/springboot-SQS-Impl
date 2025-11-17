@@ -60,6 +60,7 @@ public class DataIngestionService {
     private final String defaultS3BucketName;
     private final ContentHashRepository contentHashRepository;
     private final ContextUpdateService contextUpdateService;
+    private final Set<String> excludedItemTypes;
 
     // Configurable behavior flags
     @Value("${app.ingestion.keep-blank-after-cleanse:true}")
@@ -102,7 +103,8 @@ public class DataIngestionService {
                                 @Value("${app.json.file.path}") String jsonFilePath,
                                 S3StorageService s3StorageService,
                                 @Value("${app.s3.bucket-name}") String defaultS3BucketName,
-                                ContextUpdateService contextUpdateService) {
+                                  ContextUpdateService contextUpdateService,
+                                  @Value("${app.ingestion.excluded-item-types:}") String excludedItemTypesProperty) {
         this.rawDataStoreRepository = rawDataStoreRepository;
         this.cleansedDataStoreRepository = cleansedDataStoreRepository;
         this.contentHashRepository = contentHashRepository;
@@ -112,6 +114,7 @@ public class DataIngestionService {
         this.jsonFilePath = jsonFilePath;
         this.s3StorageService = s3StorageService;
         this.defaultS3BucketName = defaultS3BucketName;
+        this.excludedItemTypes = parseExcludedItemTypes(excludedItemTypesProperty);
     }
 
 
@@ -632,6 +635,10 @@ public class DataIngestionService {
     }
 
     private void processContentField(String content, String fieldKey, Envelope envelope, Facets facets, List<Map<String, Object>> results, IngestionCounters counters, boolean isAnalytics) {
+        if (isExcluded(fieldKey)) {
+            logger.debug("Skipping excluded itemType '{}' for sourcePath {}", fieldKey, envelope != null ? envelope.getSourcePath() : "unknown");
+            return;
+        }
         String cleansedContent = cleanseCopyText(content);
         if (isAnalytics) counters.analyticsFound++; else counters.copyFound++;
 
@@ -831,6 +838,24 @@ public class DataIngestionService {
                 }
             }
         });
+    }
+
+    private Set<String> parseExcludedItemTypes(String property) {
+        if (property == null || property.isBlank()) {
+            return Set.of();
+        }
+        return Arrays.stream(property.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .map(String::toLowerCase)
+                .collect(Collectors.toSet());
+    }
+
+    private boolean isExcluded(String fieldKey) {
+        if (fieldKey == null || excludedItemTypes.isEmpty()) {
+            return false;
+        }
+        return excludedItemTypes.contains(fieldKey.toLowerCase());
     }
 
     private static class IngestionCounters {
