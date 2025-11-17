@@ -201,11 +201,16 @@ public class EnrichmentProcessor {
     private void updateFinalCleansedDataStatus(CleansedDataStore cleansedDataEntry) {
         long errorCount = enrichedContentElementRepository.countByCleansedDataIdAndStatusContaining(cleansedDataEntry.getId(), "ERROR");
         long successCount = enrichedContentElementRepository.countByCleansedDataIdAndStatus(cleansedDataEntry.getId(), "ENRICHED");
+        long skippedCount = enrichedContentElementRepository.countByCleansedDataIdAndStatusContaining(cleansedDataEntry.getId(), "SKIPPED");
 
         String finalStatus;
         if (errorCount == 0) {
-            finalStatus = "ENRICHED_COMPLETE";
-        } else if (successCount > 0 || errorCount > 0) {
+            if (successCount + skippedCount > 0) {
+                finalStatus = "ENRICHED_COMPLETE";
+            } else {
+                finalStatus = "ENRICHMENT_FAILED";
+            }
+        } else if (successCount + skippedCount > 0) {
             finalStatus = "PARTIALLY_ENRICHED";
         } else {
             finalStatus = "ENRICHMENT_FAILED";

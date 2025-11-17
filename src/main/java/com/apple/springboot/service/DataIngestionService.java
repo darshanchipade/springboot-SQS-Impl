@@ -635,10 +635,7 @@ public class DataIngestionService {
     }
 
     private void processContentField(String content, String fieldKey, Envelope envelope, Facets facets, List<Map<String, Object>> results, IngestionCounters counters, boolean isAnalytics) {
-        if (isExcluded(fieldKey)) {
-            logger.debug("Skipping excluded itemType '{}' for sourcePath {}", fieldKey, envelope != null ? envelope.getSourcePath() : "unknown");
-            return;
-        }
+        boolean skipEnrichment = isExcluded(fieldKey);
         String cleansedContent = cleanseCopyText(content);
         if (isAnalytics) counters.analyticsFound++; else counters.copyFound++;
 
@@ -668,6 +665,7 @@ public class DataIngestionService {
             item.put("usagePath", envelope.getUsagePath());
             item.put("cleansedContent", cleansedContent);
             item.put("contentHash", calculateContentHash(cleansedContent, null));
+            item.put("skipEnrichment", skipEnrichment);
             try {
                 item.put("context", objectMapper.convertValue(finalContext, new com.fasterxml.jackson.core.type.TypeReference<>() {}));
                 // Ensure stable property and map ordering when hashing
