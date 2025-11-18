@@ -8,6 +8,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.SendMessageRequest;
+import software.amazon.awssdk.services.sqs.model.SendMessageBatchRequest;
+import software.amazon.awssdk.services.sqs.model.SendMessageBatchRequestEntry;
 
 @Service
 public class SqsService {
@@ -40,5 +42,46 @@ public class SqsService {
         } catch (Exception e) {
             logger.error("Error sending message to SQS queue", e);
         }
+    }
+
+    public void sendMessages(java.util.List<?> messagePayloads) {
+        if (messagePayloads == null || messagePayloads.isEmpty()) {
+            return;
+        }
+        java.util.List<java.util.List<?>> batches = partition(messagePayloads, 10);
+        for (java.util.List<?> batch : batches) {
+            try {
+                java.util.List<SendMessageBatchRequestEntry> entries = new java.util.ArrayList<>();
+                for (int i = 0; i < batch.size(); i++) {
+                    Object payload = batch.get(i);
+                    String body = objectMapper.writeValueAsString(payload);
+                    entries.add(SendMessageBatchRequestEntry.builder()
+                            .id("msg-" + i + "-" + java.util.UUID.randomUUID())
+                            .messageBody(body)
+                            .build());
+                }
+                SendMessageBatchRequest request = SendMessageBatchRequest.builder()
+                        .queueUrl(queueUrl)
+                        .entries(entries)
+                        .build();
+                sqsClient.sendMessageBatch(request);
+                logger.info("Successfully sent batch of {} messages to SQS queue.", entries.size());
+            } catch (JsonProcessingException e) {
+                logger.error("Error serializing batch message payload to JSON", e);
+            } catch (Exception e) {
+                logger.error("Error sending batch message to SQS queue", e);
+            }
+        }
+    }
+
+    private <T> java.util.List<java.util.List<T>> partition(java.util.List<T> list, int size) {
+        java.util.List<java.util.List<T>> parts = new java.util.ArrayList<>();
+        if (list == null || list.isEmpty() || size <= 0) {
+            return parts;
+        }
+        for (int i = 0; i < list.size(); i += size) {
+            parts.add(list.subList(i, Math.min(list.size(), i + size)));
+        }
+        return parts;
     }
 }
