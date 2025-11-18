@@ -164,6 +164,8 @@ public class EnrichmentProcessor {
         consolidatedSectionService.saveFromCleansedEntry(cleansedDataEntry);
 
         List<ConsolidatedEnrichedSection> savedSections = consolidatedSectionService.getSectionsFor(cleansedDataEntry);
+        final int BATCH_SIZE = 100;
+        List<ContentChunk> chunkBatch = new ArrayList<>();
         for (ConsolidatedEnrichedSection section : savedSections) {
             List<String> chunks = textChunkingService.chunkIfNeeded(section.getCleansedText());
             for (String chunkText : chunks) {
@@ -180,11 +182,18 @@ public class EnrichmentProcessor {
                     contentChunk.setVector(vector);
                     contentChunk.setCreatedAt(OffsetDateTime.now());
                     contentChunk.setCreatedBy("EnrichmentPipelineService");
-                    contentChunkRepository.save(contentChunk);
+                    chunkBatch.add(contentChunk);
+                    if (chunkBatch.size() >= BATCH_SIZE) {
+                        contentChunkRepository.saveAll(chunkBatch);
+                        chunkBatch.clear();
+                    }
                 } catch (Exception e) {
                     logger.error("Error creating content chunk for item path {}: {}", section.getSectionPath(), e.getMessage(), e);
                 }
             }
+        }
+        if (!chunkBatch.isEmpty()) {
+            contentChunkRepository.saveAll(chunkBatch);
         }
         updateFinalCleansedDataStatus(cleansedDataEntry);
     }
@@ -201,11 +210,16 @@ public class EnrichmentProcessor {
     private void updateFinalCleansedDataStatus(CleansedDataStore cleansedDataEntry) {
         long errorCount = enrichedContentElementRepository.countByCleansedDataIdAndStatusContaining(cleansedDataEntry.getId(), "ERROR");
         long successCount = enrichedContentElementRepository.countByCleansedDataIdAndStatus(cleansedDataEntry.getId(), "ENRICHED");
+        long skippedCount = enrichedContentElementRepository.countByCleansedDataIdAndStatusContaining(cleansedDataEntry.getId(), "SKIPPED");
 
         String finalStatus;
         if (errorCount == 0) {
-            finalStatus = "ENRICHED_COMPLETE";
-        } else if (successCount > 0 || errorCount > 0) {
+            if (successCount + skippedCount > 0) {
+                finalStatus = "ENRICHED_COMPLETE";
+            } else {
+                finalStatus = "ENRICHMENT_FAILED";
+            }
+        } else if (successCount + skippedCount > 0) {
             finalStatus = "PARTIALLY_ENRICHED";
         } else {
             finalStatus = "ENRICHMENT_FAILED";

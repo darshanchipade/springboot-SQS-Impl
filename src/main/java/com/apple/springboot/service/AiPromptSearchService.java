@@ -136,7 +136,14 @@ public class AiPromptSearchService {
                             null);
 
             List<ChatbotResultDto> vectorDtos = vectorResults.stream()
-                    .map(r -> toDto(r.getContentChunk().getConsolidatedEnrichedSection(), "content_chunks"))
+                    .map(r -> {
+                        ConsolidatedEnrichedSection section = r.getContentChunk().getConsolidatedEnrichedSection();
+                        ChatbotResultDto dto = toDto(section, "content_chunks");
+                        if (dto.getContext() == null) {
+                            dto.setContext(section.getContext());
+                        }
+                        return dto;
+                    })
                     .collect(Collectors.toList());
 
             // Optional role post-filter (contains, case-insensitive)
@@ -176,7 +183,13 @@ public class AiPromptSearchService {
                 }
 
                 List<ChatbotResultDto> out = rows.stream()
-                        .map(s -> toDto(s, "consolidated_enriched_sections"))
+                        .map(s -> {
+                            ChatbotResultDto dto = toDto(s, "consolidated_enriched_sections");
+                            if (dto.getContext() == null) {
+                                dto.setContext(s.getContext());
+                            }
+                            return dto;
+                        })
                         .collect(java.util.stream.Collectors.toList());
 
                 // annotate section + match_terms
@@ -199,13 +212,19 @@ public class AiPromptSearchService {
             List<ChatbotResultDto> fallback = !vectorDtos.isEmpty()
                     ? vectorDtos
                     : metaMatches.stream()
-                    .map(s -> toDto(s, "consolidated_enriched_sections"))
+                    .map(s -> {
+                        ChatbotResultDto dto = toDto(s, "consolidated_enriched_sections");
+                        if (dto.getContext() == null) {
+                            dto.setContext(s.getContext());
+                        }
+                        return dto;
+                    })
                     .collect(Collectors.toList());
             return fallback;
         } catch(Exception e){
-                return List.of();
-            }
+            return List.of();
         }
+    }
 
     // Helpers
 

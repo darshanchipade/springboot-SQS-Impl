@@ -110,4 +110,40 @@ public class EnrichmentPersistenceService {
         enrichedContentElementRepository.save(errorElement);
         logger.debug("Saved error element for item path: {}", itemDetail.sourcePath);
     }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void saveSkippedEnrichedElement(CleansedItemDetail itemDetail, CleansedDataStore parentEntry, String status) {
+
+        Optional<EnrichedContentElement> existingElementOpt = enrichedContentElementRepository.findByCleansedDataIdAndItemSourcePathAndItemOriginalFieldName(
+                parentEntry.getId(), itemDetail.sourcePath, itemDetail.originalFieldName);
+
+        EnrichedContentElement skippedElement = existingElementOpt.orElse(new EnrichedContentElement());
+
+        if (skippedElement.getId() == null) {
+            skippedElement.setCleansedDataId(parentEntry.getId());
+            skippedElement.setVersion(parentEntry.getVersion());
+            skippedElement.setSourceUri(parentEntry.getSourceUri());
+            skippedElement.setItemSourcePath(itemDetail.sourcePath);
+            skippedElement.setItemOriginalFieldName(itemDetail.originalFieldName);
+            skippedElement.setItemModelHint(itemDetail.model);
+        }
+
+        skippedElement.setCleansedText(itemDetail.cleansedContent);
+        skippedElement.setEnrichedAt(OffsetDateTime.now());
+        skippedElement.setStatus(status);
+        skippedElement.setContext(objectMapper.convertValue(itemDetail.context, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {}));
+
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("enrichmentSkipped", true);
+        metadata.put("reason", "Excluded via configuration");
+        metadata.put("timestamp", skippedElement.getEnrichedAt().toString());
+        try {
+            skippedElement.setEnrichmentMetadata(objectMapper.writeValueAsString(metadata));
+        } catch (JsonProcessingException e) {
+            skippedElement.setEnrichmentMetadata("{\"enrichmentSkipped\":true}");
+        }
+
+        enrichedContentElementRepository.save(skippedElement);
+        logger.debug("Saved skipped enrichment element for item path: {}", itemDetail.sourcePath);
+    }
 }

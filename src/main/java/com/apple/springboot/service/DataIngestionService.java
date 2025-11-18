@@ -26,6 +26,8 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.nio.charset.StandardCharsets;
+import java.util.stream.Collectors;
+
 @Service
 public class DataIngestionService {
 
@@ -39,6 +41,9 @@ public class DataIngestionService {
     private static final Set<String> CONTENT_FIELD_KEYS = Set.of("copy", "disclaimers", "text", "url");
     private static final Set<String> ICON_NODE_KEYS = Set.of("icon");
     private static final Set<String> ICON_META_KEYS = Set.of("_path", "_uri_path");
+    private static final Set<String> IMAGE_META_KEYS = Set.of(
+            "_path", "_model", "_id", "_uri1x_path", "_uri2x_path", "_uri_path"
+    );
     private static final Pattern LOCALE_PATTERN = Pattern.compile("(?<=/)([a-z]{2})[-_]([A-Z]{2})(?=/|$)");
     private static final String USAGE_REF_DELIM = " ::ref:: ";
     private static final Map<String, String> EVENT_KEYWORDS = Map.of(
@@ -57,6 +62,7 @@ public class DataIngestionService {
     private final String defaultS3BucketName;
     private final ContentHashRepository contentHashRepository;
     private final ContextUpdateService contextUpdateService;
+    private final Set<String> excludedItemTypes;
 
     // Configurable behavior flags
     @Value("${app.ingestion.keep-blank-after-cleanse:true}")
@@ -99,7 +105,8 @@ public class DataIngestionService {
                                 @Value("${app.json.file.path}") String jsonFilePath,
                                 S3StorageService s3StorageService,
                                 @Value("${app.s3.bucket-name}") String defaultS3BucketName,
-                                ContextUpdateService contextUpdateService) {
+                                ContextUpdateService contextUpdateService,
+                                @Value("${app.ingestion.excluded-item-types:}") String excludedItemTypesProperty) {
         this.rawDataStoreRepository = rawDataStoreRepository;
         this.cleansedDataStoreRepository = cleansedDataStoreRepository;
         this.contentHashRepository = contentHashRepository;
@@ -109,6 +116,7 @@ public class DataIngestionService {
         this.jsonFilePath = jsonFilePath;
         this.s3StorageService = s3StorageService;
         this.defaultS3BucketName = defaultS3BucketName;
+        this.excludedItemTypes = parseExcludedItemTypes(excludedItemTypesProperty);
     }
 
 
@@ -621,12 +629,15 @@ public class DataIngestionService {
                 currentFacets.put(key, value.asText());
             } else if (ICON_NODE_KEYS.contains(key) && value.isObject()) {
                 enrichFacetsWithIconProperties(value, key, currentFacets);
+            } else if (isImageNodeKey(key) && value.isObject()) {
+                enrichFacetsWithImageProperties(value, key, currentFacets);
             }
         });
         return currentFacets;
     }
 
     private void processContentField(String content, String fieldKey, Envelope envelope, Facets facets, List<Map<String, Object>> results, IngestionCounters counters, boolean isAnalytics) {
+        boolean skipEnrichment = isExcluded(fieldKey);
         String cleansedContent = cleanseCopyText(content);
         if (isAnalytics) counters.analyticsFound++; else counters.copyFound++;
 
@@ -656,6 +667,7 @@ public class DataIngestionService {
             item.put("usagePath", envelope.getUsagePath());
             item.put("cleansedContent", cleansedContent);
             item.put("contentHash", calculateContentHash(cleansedContent, null));
+            item.put("skipEnrichment", skipEnrichment);
             try {
                 item.put("context", objectMapper.convertValue(finalContext, new com.fasterxml.jackson.core.type.TypeReference<>() {}));
                 // Ensure stable property and map ordering when hashing
@@ -781,6 +793,12 @@ public class DataIngestionService {
         return cleansed;
     }
 
+    private boolean isImageNodeKey(String key) {
+        if (key == null) return false;
+        String lower = key.toLowerCase();
+        return lower.contains("image") || lower.contains("backgroundimage");
+    }
+
     private void enrichFacetsWithIconProperties(JsonNode iconNode, String prefix, Facets targetFacets) {
         if (iconNode == null || iconNode.isNull()) return;
         iconNode.fields().forEachRemaining(entry -> {
@@ -794,6 +812,51 @@ public class DataIngestionService {
                 enrichFacetsWithIconProperties(value, facetKey, targetFacets);
             }
         });
+    }
+
+    private void enrichFacetsWithImageProperties(JsonNode imageNode, String prefix, Facets targetFacets) {
+        if (imageNode == null || imageNode.isNull()) return;
+        imageNode.fields().forEachRemaining(entry -> {
+            String key = entry.getKey();
+            if (key.startsWith("_") && !IMAGE_META_KEYS.contains(key)) return;
+            JsonNode value = entry.getValue();
+            String facetKey = (prefix == null || prefix.isBlank()) ? key : prefix + "." + key;
+            if (value.isValueNode()) {
+                targetFacets.put(facetKey, value.asText());
+            } else if (value.isObject()) {
+                enrichFacetsWithImageProperties(value, facetKey, targetFacets);
+            } else if (value.isArray()) {
+                int idx = 0;
+                for (JsonNode element : value) {
+                    String arrayKey = facetKey + "[" + idx + "]";
+                    if (element.isValueNode()) {
+                        targetFacets.put(arrayKey, element.asText());
+                    } else if (element.isObject()) {
+                        enrichFacetsWithImageProperties(element, arrayKey, targetFacets);
+                    }
+                    idx++;
+                }
+            }
+        });
+    }
+
+    private Set<String> parseExcludedItemTypes(String property) {
+        if (property == null || property.isBlank()) {
+            return Set.of();
+        }
+        return Arrays.stream(property.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .map(String::toLowerCase)
+                .collect(Collectors.toSet());
+    }
+
+    private boolean isExcluded(String fieldKey) {
+        if (fieldKey == null || excludedItemTypes.isEmpty()) {
+            return false;
+        }
+        String lower = fieldKey.toLowerCase();
+        return excludedItemTypes.stream().anyMatch(lower::startsWith);
     }
 
     private static class IngestionCounters {

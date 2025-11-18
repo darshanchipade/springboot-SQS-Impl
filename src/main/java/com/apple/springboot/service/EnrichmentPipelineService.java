@@ -25,17 +25,23 @@ public class EnrichmentPipelineService {
     private final ObjectMapper objectMapper;
     private final SqsService sqsService;
     private final EnrichmentCompletionService completionService;
+    private final EnrichmentProcessor enrichmentProcessor;
+    private final EnrichmentPersistenceService persistenceService;
 
     public EnrichmentPipelineService(CleansedDataStoreRepository cleansedDataStoreRepository,
                                      EnrichedContentElementRepository enrichedContentElementRepository,
                                      ObjectMapper objectMapper,
                                      SqsService sqsService,
-                                     EnrichmentCompletionService completionService) {
+                                     EnrichmentCompletionService completionService,
+                                     EnrichmentProcessor enrichmentProcessor,
+                                     EnrichmentPersistenceService persistenceService) {
         this.cleansedDataStoreRepository = cleansedDataStoreRepository;
         this.enrichedContentElementRepository = enrichedContentElementRepository;
         this.objectMapper = objectMapper;
         this.sqsService = sqsService;
         this.completionService = completionService;
+        this.enrichmentProcessor = enrichmentProcessor;
+        this.persistenceService = persistenceService;
     }
 
     @Transactional
@@ -81,7 +87,7 @@ public class EnrichmentPipelineService {
                 ));
 
         // Filter to only items that need enrichment (text changed)
-        List<CleansedItemDetail> itemsToQueue = itemsToEnrich.stream()
+        List<CleansedItemDetail> changedItems = itemsToEnrich.stream()
                 .filter(itemDetail -> !enrichedContentElementRepository
                         .existsByCleansedDataIdAndItemSourcePathAndItemOriginalFieldNameAndCleansedText(
                                 cleansedDataStoreId,
@@ -90,19 +96,43 @@ public class EnrichmentPipelineService {
                                 itemDetail.cleansedContent))
                 .collect(Collectors.toList());
 
-        logger.info("After change-detection filtering, {} items remain for enrichment (CleansedDataStore ID {}).",
-                itemsToQueue.size(), cleansedDataStoreId);
+        logger.info("After change-detection filtering, {} items remain for processing (CleansedDataStore ID {}).",
+                changedItems.size(), cleansedDataStoreId);
 
-        if (itemsToQueue.isEmpty()) {
+        if (changedItems.isEmpty()) {
             logger.info("No items require enrichment for CleansedDataStore ID: {}. Marking as ENRICHED_NO_ITEMS_TO_PROCESS.", cleansedDataStoreId);
             cleansedDataEntry.setStatus("ENRICHED_NO_ITEMS_TO_PROCESS");
             cleansedDataStoreRepository.save(cleansedDataEntry);
             return;
         }
 
-        // Track completion on the ACTUAL number queued
-        logger.info("Starting completion tracking for CleansedDataStore ID {} with {} queued items.", cleansedDataStoreId, itemsToQueue.size());
-        completionService.startTracking(cleansedDataStoreId, itemsToQueue.size());
+        List<CleansedItemDetail> skippedItems = changedItems.stream()
+                .filter(detail -> detail.skipEnrichment)
+                .collect(Collectors.toList());
+        List<CleansedItemDetail> itemsToQueue = changedItems.stream()
+                .filter(detail -> !detail.skipEnrichment)
+                .collect(Collectors.toList());
+
+        logger.info("Split {} items into {} to queue and {} to skip enrichment for CleansedDataStore ID {}.",
+                changedItems.size(), itemsToQueue.size(), skippedItems.size(), cleansedDataStoreId);
+
+        logger.info("Starting completion tracking for CleansedDataStore ID {} with {} total items (including skipped).",
+                cleansedDataStoreId, changedItems.size());
+        completionService.startTracking(cleansedDataStoreId, changedItems.size());
+
+        for (CleansedItemDetail skipped : skippedItems) {
+            handleSkippedItem(skipped, cleansedDataEntry);
+        }
+
+        if (itemsToQueue.isEmpty()) {
+            logger.info("All {} items were skipped for enrichment for CleansedDataStore ID {}.", changedItems.size(), cleansedDataStoreId);
+            cleansedDataEntry.setStatus("ENRICHMENT_SKIPPED");
+            cleansedDataStoreRepository.save(cleansedDataEntry);
+            return;
+        }
+
+        logger.info("Queuing {} items for enrichment after skipping {} for CleansedDataStore ID {}.",
+                itemsToQueue.size(), skippedItems.size(), cleansedDataStoreId);
 
         // Queue items
         for (CleansedItemDetail itemDetail : itemsToQueue) {
@@ -116,6 +146,24 @@ public class EnrichmentPipelineService {
         logger.info("Finished queuing enrichment tasks for CleansedDataStore ID: {}. Final status: {}", cleansedDataEntry.getId(), cleansedDataEntry.getStatus());
     }
 
+    private void handleSkippedItem(CleansedItemDetail itemDetail, CleansedDataStore cleansedDataEntry) {
+        try {
+            persistenceService.saveSkippedEnrichedElement(itemDetail, cleansedDataEntry, "ENRICHMENT_SKIPPED");
+        } catch (Exception e) {
+            logger.error("Failed to persist skipped enrichment item for {}::{}: {}", itemDetail.sourcePath, itemDetail.originalFieldName, e.getMessage(), e);
+        }
+
+        try {
+            boolean complete = completionService.itemCompleted(cleansedDataEntry.getId());
+            if (complete) {
+                logger.info("All items complete for {} after processing skipped entries. Running finalization.", cleansedDataEntry.getId());
+                enrichmentProcessor.runFinalizationSteps(cleansedDataEntry);
+            }
+        } catch (Exception ex) {
+            logger.error("Completion tracking failed for {} while handling skipped items: {}", cleansedDataEntry.getId(), ex.getMessage(), ex);
+        }
+    }
+
     private List<CleansedItemDetail> convertMapsToCleansedItemDetails(List<Map<String, Object>> maps) {
         return maps.stream()
                 .map(map -> {
@@ -125,7 +173,8 @@ public class EnrichmentPipelineService {
                         String cleansedContent = (String) map.get("cleansedContent");
                         String model = (String) map.get("model");
                         EnrichmentContext context = objectMapper.convertValue(map.get("context"), EnrichmentContext.class);
-                        return new CleansedItemDetail(sourcePath, originalFieldName, cleansedContent, model, context);
+                        boolean skipEnrichment = extractSkipFlag(map.get("skipEnrichment"));
+                        return new CleansedItemDetail(sourcePath, originalFieldName, cleansedContent, model, context, skipEnrichment);
                     } catch (Exception e) {
                         logger.warn("Could not convert map to CleansedItemDetail object. Skipping item. Map: {}, Error: {}", map, e.getMessage());
                         return null;
@@ -133,5 +182,15 @@ public class EnrichmentPipelineService {
                 })
                 .filter(Objects::nonNull)
                 .collect(Collectors.toList());
+    }
+
+    private boolean extractSkipFlag(Object flag) {
+        if (flag instanceof Boolean b) {
+            return b;
+        }
+        if (flag instanceof String s) {
+            return Boolean.parseBoolean(s);
+        }
+        return false;
     }
 }
