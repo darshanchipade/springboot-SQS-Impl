@@ -160,6 +160,9 @@ public class EnrichmentProcessor {
 
     @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
     public void runFinalizationSteps(CleansedDataStore cleansedDataEntry) {
+        if (!acquireFinalizationLock(cleansedDataEntry)) {
+            return;
+        }
         logger.info("Running finalization steps for CleansedDataStore ID: {}", cleansedDataEntry.getId());
         consolidatedSectionService.saveFromCleansedEntry(cleansedDataEntry);
 
@@ -196,6 +199,27 @@ public class EnrichmentProcessor {
             contentChunkRepository.saveAll(chunkBatch);
         }
         updateFinalCleansedDataStatus(cleansedDataEntry);
+    }
+
+    private boolean acquireFinalizationLock(CleansedDataStore cleansedDataEntry) {
+        UUID id = cleansedDataEntry.getId();
+        if (id == null) {
+            return false;
+        }
+        List<String> eligibleStatuses = List.of("ENRICHMENT_QUEUED", "ENRICHMENT_SKIPPED");
+        for (String expected : eligibleStatuses) {
+            int updated = cleansedDataStoreRepository.updateStatusIfMatches(id, expected, "FINALIZING");
+            if (updated == 1) {
+                cleansedDataEntry.setStatus("FINALIZING");
+                logger.info("Acquired finalization lock for CleansedDataStore ID {} (previous status {}).", id, expected);
+                return true;
+            }
+        }
+        if ("FINALIZING".equalsIgnoreCase(cleansedDataEntry.getStatus())) {
+            return true;
+        }
+        logger.info("Another instance is finalizing CleansedDataStore ID {}. Current status: {}", id, cleansedDataEntry.getStatus());
+        return false;
     }
 
     private void throttleFor(RateLimiter... limiters) {
