@@ -134,10 +134,12 @@ public class EnrichmentPipelineService {
         logger.info("Queuing {} items for enrichment after skipping {} for CleansedDataStore ID {}.",
                 itemsToQueue.size(), skippedItems.size(), cleansedDataStoreId);
 
-        // Queue items
-        for (CleansedItemDetail itemDetail : itemsToQueue) {
-            EnrichmentMessage message = new EnrichmentMessage(itemDetail, cleansedDataStoreId);
-            sqsService.sendMessage(message);
+        List<EnrichmentMessage> messages = itemsToQueue.stream()
+                .map(itemDetail -> new EnrichmentMessage(itemDetail, cleansedDataStoreId))
+                .collect(Collectors.toList());
+
+        if (!messages.isEmpty()) {
+            sqsService.sendMessages(messages);
         }
 
         cleansedDataEntry.setStatus("ENRICHMENT_QUEUED");
