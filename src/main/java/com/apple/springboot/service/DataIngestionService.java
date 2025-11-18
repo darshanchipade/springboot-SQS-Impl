@@ -853,7 +853,8 @@ public class DataIngestionService {
         if (fieldKey == null || excludedItemTypes.isEmpty()) {
             return false;
         }
-        return excludedItemTypes.contains(fieldKey.toLowerCase());
+        String lower = fieldKey.toLowerCase();
+        return excludedItemTypes.stream().anyMatch(lower::startsWith);
     }
 
     private static class IngestionCounters {
