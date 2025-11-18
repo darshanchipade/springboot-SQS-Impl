@@ -164,6 +164,8 @@ public class EnrichmentProcessor {
         consolidatedSectionService.saveFromCleansedEntry(cleansedDataEntry);
 
         List<ConsolidatedEnrichedSection> savedSections = consolidatedSectionService.getSectionsFor(cleansedDataEntry);
+        final int BATCH_SIZE = 100;
+        List<ContentChunk> chunkBatch = new ArrayList<>();
         for (ConsolidatedEnrichedSection section : savedSections) {
             List<String> chunks = textChunkingService.chunkIfNeeded(section.getCleansedText());
             for (String chunkText : chunks) {
@@ -180,11 +182,18 @@ public class EnrichmentProcessor {
                     contentChunk.setVector(vector);
                     contentChunk.setCreatedAt(OffsetDateTime.now());
                     contentChunk.setCreatedBy("EnrichmentPipelineService");
-                    contentChunkRepository.save(contentChunk);
+                    chunkBatch.add(contentChunk);
+                    if (chunkBatch.size() >= BATCH_SIZE) {
+                        contentChunkRepository.saveAll(chunkBatch);
+                        chunkBatch.clear();
+                    }
                 } catch (Exception e) {
                     logger.error("Error creating content chunk for item path {}: {}", section.getSectionPath(), e.getMessage(), e);
                 }
             }
+        }
+        if (!chunkBatch.isEmpty()) {
+            contentChunkRepository.saveAll(chunkBatch);
         }
         updateFinalCleansedDataStatus(cleansedDataEntry);
     }
