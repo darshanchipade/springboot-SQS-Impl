@@ -167,6 +167,7 @@ public class EnrichmentProcessor {
         consolidatedSectionService.saveFromCleansedEntry(cleansedDataEntry);
 
         List<ConsolidatedEnrichedSection> savedSections = consolidatedSectionService.getSectionsFor(cleansedDataEntry);
+        contentChunkRepository.deleteByCleansedDataId(cleansedDataEntry.getId());
         final int BATCH_SIZE = 100;
         List<ContentChunk> chunkBatch = new ArrayList<>();
         for (ConsolidatedEnrichedSection section : savedSections) {

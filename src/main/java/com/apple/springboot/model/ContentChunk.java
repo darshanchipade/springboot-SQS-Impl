@@ -26,7 +26,13 @@ import java.util.UUID;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-@Table(name = "content_chunks")
+@Table(
+        name = "content_chunks",
+        uniqueConstraints = @UniqueConstraint(
+                name = "uk_content_chunk_section_text",
+                columnNames = {"consolidated_enriched_section_id", "chunk_text"}
+        )
+)
 public class ContentChunk {
 
     @Id
