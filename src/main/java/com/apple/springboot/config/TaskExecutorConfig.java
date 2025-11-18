@@ -11,8 +11,8 @@ public class TaskExecutorConfig {
     @Bean("sqsMessageProcessorExecutor")
     public TaskExecutor sqsMessageProcessorExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(8); // Start with 5 threads
-        executor.setMaxPoolSize(12); // Allow up to 10 threads
+        executor.setCorePoolSize(5); // Start with 5 threads
+        executor.setMaxPoolSize(8); // Allow up to 10 threads
         executor.setQueueCapacity(500); // Queue up to 25 tasks before blocking
         executor.setRejectedExecutionHandler(new java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy());
         executor.setThreadNamePrefix("SQSWorker-");
