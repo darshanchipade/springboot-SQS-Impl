@@ -44,16 +44,16 @@ public class SqsService {
         }
     }
 
-    public void sendMessages(java.util.List<?> messagePayloads) {
+    public <T> void sendMessages(java.util.List<T> messagePayloads) {
         if (messagePayloads == null || messagePayloads.isEmpty()) {
             return;
         }
-        java.util.List<java.util.List<?>> batches = partition(messagePayloads, 10);
-        for (java.util.List<?> batch : batches) {
+        java.util.List<java.util.List<T>> batches = partition(messagePayloads, 10);
+        for (java.util.List<T> batch : batches) {
             try {
                 java.util.List<SendMessageBatchRequestEntry> entries = new java.util.ArrayList<>();
                 for (int i = 0; i < batch.size(); i++) {
-                    Object payload = batch.get(i);
+                    T payload = batch.get(i);
                     String body = objectMapper.writeValueAsString(payload);
                     entries.add(SendMessageBatchRequestEntry.builder()
                             .id("msg-" + i + "-" + java.util.UUID.randomUUID())
