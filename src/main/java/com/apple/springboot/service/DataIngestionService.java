@@ -777,6 +777,7 @@ public class DataIngestionService {
         // Targeted replacements based on requested patterns
         cleansed = NBSP_PATTERN.matcher(cleansed).replaceAll(" ");
         cleansed = BR_PATTERN.matcher(cleansed).replaceAll(" ");
+        cleansed = SOSUMI_PATTERN.matcher(cleansed).replaceAll(" ");
         // Remove nested URL macro patterns first to avoid partial leftovers
         cleansed = NESTED_URL_PATTERN.matcher(cleansed).replaceAll(" ");
         // Then remove regular URL macro patterns
