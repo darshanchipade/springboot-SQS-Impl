@@ -39,9 +39,9 @@ public class ContentChunk {
     @GeneratedValue
     private UUID id;
 
-    @Version
-    @Column(name = "row_version", nullable = false)
-    private long version;
+//    @Version
+//    @Column(name = "row_version", nullable = false)
+//    private long version;
 
     @ManyToOne
     @JoinColumn(name = "consolidated_enriched_section_id", nullable = false)
