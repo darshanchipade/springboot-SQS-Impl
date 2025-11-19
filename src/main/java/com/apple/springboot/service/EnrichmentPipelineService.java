@@ -141,6 +141,9 @@ public class EnrichmentPipelineService {
                 .map(itemDetail -> new EnrichmentMessage(itemDetail, cleansedDataStoreId))
                 .collect(Collectors.toList());
 
+        cleansedDataEntry.setStatus("ENRICHMENT_QUEUED");
+        cleansedDataStoreRepository.save(cleansedDataEntry);
+
         if (useSqs) {
             if (!messages.isEmpty()) {
                 sqsService.sendMessages(messages);
@@ -154,13 +157,9 @@ public class EnrichmentPipelineService {
                     logger.error("Inline enrichment failed for message {}: {}", message.getCleansedDataStoreId(), ex.getMessage(), ex);
                 }
             }
-            return;
         }
 
-        cleansedDataEntry.setStatus("ENRICHMENT_QUEUED");
-        logger.info("{} items were queued for enrichment for CleansedDataStore ID: {}", itemsToQueue.size(), cleansedDataEntry.getId());
-        cleansedDataStoreRepository.save(cleansedDataEntry);
-        logger.info("Finished queuing enrichment tasks for CleansedDataStore ID: {}. Final status: {}", cleansedDataEntry.getId(), cleansedDataEntry.getStatus());
+        logger.info("{} items were dispatched for enrichment for CleansedDataStore ID: {}", itemsToQueue.size(), cleansedDataEntry.getId());
     }
 
     private void handleSkippedItem(CleansedItemDetail itemDetail, CleansedDataStore cleansedDataEntry) {
