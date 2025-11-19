@@ -168,7 +168,7 @@ public class EnrichmentProcessor {
 
         List<ConsolidatedEnrichedSection> savedSections = consolidatedSectionService.getSectionsFor(cleansedDataEntry);
         contentChunkRepository.deleteByCleansedDataId(cleansedDataEntry.getId());
-        final int BATCH_SIZE = 200;
+        final int BATCH_SIZE =300;
         List<ContentChunk> chunkBatch = new ArrayList<>();
         for (ConsolidatedEnrichedSection section : savedSections) {
             List<String> chunks = textChunkingService.chunkIfNeeded(section.getCleansedText());
@@ -207,7 +207,7 @@ public class EnrichmentProcessor {
         if (id == null) {
             return false;
         }
-        List<String> eligibleStatuses = List.of("ENRICHMENT_QUEUED", "ENRICHMENT_SKIPPED");
+        List<String> eligibleStatuses = List.of("ENRICHMENT_QUEUED", "ENRICHMENT_SKIPPED", "ENRICHMENT_IN_PROGRESS");
         for (String expected : eligibleStatuses) {
             int updated = cleansedDataStoreRepository.updateStatusIfMatches(id, expected, "FINALIZING");
             if (updated == 1) {

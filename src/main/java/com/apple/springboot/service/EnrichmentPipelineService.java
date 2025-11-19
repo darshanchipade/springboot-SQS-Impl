@@ -9,6 +9,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -27,6 +28,7 @@ public class EnrichmentPipelineService {
     private final EnrichmentCompletionService completionService;
     private final EnrichmentProcessor enrichmentProcessor;
     private final EnrichmentPersistenceService persistenceService;
+    private final boolean useSqs;
 
     public EnrichmentPipelineService(CleansedDataStoreRepository cleansedDataStoreRepository,
                                      EnrichedContentElementRepository enrichedContentElementRepository,
@@ -34,7 +36,8 @@ public class EnrichmentPipelineService {
                                      SqsService sqsService,
                                      EnrichmentCompletionService completionService,
                                      EnrichmentProcessor enrichmentProcessor,
-                                     EnrichmentPersistenceService persistenceService) {
+                                     EnrichmentPersistenceService persistenceService,
+                                     @Value("${app.enrichment.use-sqs:false}") boolean useSqs) {
         this.cleansedDataStoreRepository = cleansedDataStoreRepository;
         this.enrichedContentElementRepository = enrichedContentElementRepository;
         this.objectMapper = objectMapper;
@@ -42,6 +45,7 @@ public class EnrichmentPipelineService {
         this.completionService = completionService;
         this.enrichmentProcessor = enrichmentProcessor;
         this.persistenceService = persistenceService;
+        this.useSqs = useSqs;
     }
 
     @Transactional
@@ -138,14 +142,25 @@ public class EnrichmentPipelineService {
                 .map(itemDetail -> new EnrichmentMessage(itemDetail, cleansedDataStoreId))
                 .collect(Collectors.toList());
 
-        if (!messages.isEmpty()) {
-            sqsService.sendMessages(messages);
+        cleansedDataEntry.setStatus("ENRICHMENT_QUEUED");
+        cleansedDataStoreRepository.save(cleansedDataEntry);
+
+        if (useSqs) {
+            if (!messages.isEmpty()) {
+                sqsService.sendMessages(messages);
+            }
+        } else {
+            logger.info("SQS disabled; running enrichment inline for {} items.", messages.size());
+            for (EnrichmentMessage message : messages) {
+                try {
+                    enrichmentProcessor.process(message);
+                } catch (Exception ex) {
+                    logger.error("Inline enrichment failed for message {}: {}", message.getCleansedDataStoreId(), ex.getMessage(), ex);
+                }
+            }
         }
 
-        cleansedDataEntry.setStatus("ENRICHMENT_QUEUED");
-        logger.info("{} items were queued for enrichment for CleansedDataStore ID: {}", itemsToQueue.size(), cleansedDataEntry.getId());
-        cleansedDataStoreRepository.save(cleansedDataEntry);
-        logger.info("Finished queuing enrichment tasks for CleansedDataStore ID: {}. Final status: {}", cleansedDataEntry.getId(), cleansedDataEntry.getStatus());
+        logger.info("{} items were dispatched for enrichment for CleansedDataStore ID: {}", itemsToQueue.size(), cleansedDataEntry.getId());
     }
 
     private void handleSkippedItem(CleansedItemDetail itemDetail, CleansedDataStore cleansedDataEntry) {
