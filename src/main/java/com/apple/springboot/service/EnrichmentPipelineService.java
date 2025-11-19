@@ -27,6 +27,7 @@ public class EnrichmentPipelineService {
     private final EnrichmentCompletionService completionService;
     private final EnrichmentProcessor enrichmentProcessor;
     private final EnrichmentPersistenceService persistenceService;
+    private final boolean useSqs;
 
     public EnrichmentPipelineService(CleansedDataStoreRepository cleansedDataStoreRepository,
                                      EnrichedContentElementRepository enrichedContentElementRepository,
@@ -34,7 +35,8 @@ public class EnrichmentPipelineService {
                                      SqsService sqsService,
                                      EnrichmentCompletionService completionService,
                                      EnrichmentProcessor enrichmentProcessor,
-                                     EnrichmentPersistenceService persistenceService) {
+                                     EnrichmentPersistenceService persistenceService,
+                                     @Value("${app.enrichment.use-sqs:true}") boolean useSqs) {
         this.cleansedDataStoreRepository = cleansedDataStoreRepository;
         this.enrichedContentElementRepository = enrichedContentElementRepository;
         this.objectMapper = objectMapper;
@@ -42,6 +44,7 @@ public class EnrichmentPipelineService {
         this.completionService = completionService;
         this.enrichmentProcessor = enrichmentProcessor;
         this.persistenceService = persistenceService;
+        this.useSqs = useSqs;
     }
 
     @Transactional
@@ -138,8 +141,20 @@ public class EnrichmentPipelineService {
                 .map(itemDetail -> new EnrichmentMessage(itemDetail, cleansedDataStoreId))
                 .collect(Collectors.toList());
 
-        if (!messages.isEmpty()) {
-            sqsService.sendMessages(messages);
+        if (useSqs) {
+            if (!messages.isEmpty()) {
+                sqsService.sendMessages(messages);
+            }
+        } else {
+            logger.info("SQS disabled; running enrichment inline for {} items.", messages.size());
+            for (EnrichmentMessage message : messages) {
+                try {
+                    enrichmentProcessor.process(message);
+                } catch (Exception ex) {
+                    logger.error("Inline enrichment failed for message {}: {}", message.getCleansedDataStoreId(), ex.getMessage(), ex);
+                }
+            }
+            return;
         }
 
         cleansedDataEntry.setStatus("ENRICHMENT_QUEUED");
