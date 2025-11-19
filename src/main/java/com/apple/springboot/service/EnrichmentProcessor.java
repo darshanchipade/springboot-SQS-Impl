@@ -88,32 +88,7 @@ public class EnrichmentProcessor {
         }
 
         try {
-            // Proceed without per-run idempotency skip; queuing logic prevents duplicates
-            Map<String, String> itemContent = new HashMap<>();
-            itemContent.put("cleansedContent", itemDetail.cleansedContent);
-            JsonNode itemJson = objectMapper.valueToTree(itemContent);
-
-            Map<String, Object> result = bedrockEnrichmentService.enrichItem(itemJson, itemDetail.context);
-
-            if (result.containsKey("error")) {
-                String msg = "Bedrock enrichment failed: " + result.get("error");
-                persistenceService.saveErrorEnrichedElement(itemDetail, cleansedDataEntry, "ERROR_ENRICHMENT_FAILED", msg);
-            } else {
-                Map<String, Object> ctx = objectMapper.convertValue(itemDetail.context, new com.fasterxml.jackson.core.type.TypeReference<>() {
-                });
-                ctx.put("fullContextId", itemDetail.sourcePath + "::" + itemDetail.originalFieldName);
-                ctx.put("sourcePath", itemDetail.sourcePath);
-                Map<String, Object> prov = new HashMap<>();
-                prov.put("modelId", bedrockEnrichmentService.getConfiguredModelId());
-                ctx.put("provenance", prov);
-                result.put("context", ctx);
-
-                if (!aiResponseValidator.isValid(result)) {
-                    persistenceService.saveErrorEnrichedElement(itemDetail, cleansedDataEntry, "ERROR_VALIDATION_FAILED", "Invalid AI response");
-                } else {
-                    persistenceService.saveEnrichedElement(itemDetail, cleansedDataEntry, result, "ENRICHED");
-                }
-            }
+            performEnrichment(itemDetail, cleansedDataEntry);
         } catch (ThrottledException te) {
             shouldRecordCompletion = false;
             logger.warn("Bedrock throttled for item {}::{}, re-queueing message.", itemDetail.sourcePath, itemDetail.originalFieldName);
@@ -156,6 +131,22 @@ public class EnrichmentProcessor {
                 }
             }
         }
+    }
+
+    public void processInline(CleansedItemDetail itemDetail, CleansedDataStore cleansedDataEntry) {
+        throttleFor(bedrockRateLimiter, chatRateLimiter);
+        try {
+            performEnrichment(itemDetail, cleansedDataEntry);
+        } catch (ThrottledException te) {
+            logger.warn("Inline enrichment throttled for {}::{}, marking as error: {}", itemDetail.sourcePath, itemDetail.originalFieldName, te.getMessage());
+            persistenceService.saveErrorEnrichedElement(itemDetail, cleansedDataEntry, "ERROR_ENRICHMENT_FAILED", "Throttled during inline processing");
+        } catch (Exception e) {
+            persistenceService.saveErrorEnrichedElement(itemDetail, cleansedDataEntry, "ERROR_UNEXPECTED", e.getMessage());
+        }
+    }
+
+    public void finalizeInline(CleansedDataStore cleansedDataEntry) {
+        runFinalizationSteps(cleansedDataEntry);
     }
 
     @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
@@ -229,6 +220,39 @@ public class EnrichmentProcessor {
             if (limiter != null) {
                 limiter.acquire();
             }
+        }
+    }
+
+    private void performEnrichment(CleansedItemDetail itemDetail, CleansedDataStore cleansedDataEntry) throws Exception {
+        try {
+            Map<String, String> itemContent = new HashMap<>();
+            itemContent.put("cleansedContent", itemDetail.cleansedContent);
+            JsonNode itemJson = objectMapper.valueToTree(itemContent);
+
+            Map<String, Object> result = bedrockEnrichmentService.enrichItem(itemJson, itemDetail.context);
+
+            if (result.containsKey("error")) {
+                String msg = "Bedrock enrichment failed: " + result.get("error");
+                persistenceService.saveErrorEnrichedElement(itemDetail, cleansedDataEntry, "ERROR_ENRICHMENT_FAILED", msg);
+            } else {
+                Map<String, Object> ctx = objectMapper.convertValue(itemDetail.context, new com.fasterxml.jackson.core.type.TypeReference<>() {});
+                ctx.put("fullContextId", itemDetail.sourcePath + "::" + itemDetail.originalFieldName);
+                ctx.put("sourcePath", itemDetail.sourcePath);
+                Map<String, Object> prov = new HashMap<>();
+                prov.put("modelId", bedrockEnrichmentService.getConfiguredModelId());
+                ctx.put("provenance", prov);
+                result.put("context", ctx);
+
+                if (!aiResponseValidator.isValid(result)) {
+                    persistenceService.saveErrorEnrichedElement(itemDetail, cleansedDataEntry, "ERROR_VALIDATION_FAILED", "Invalid AI response");
+                } else {
+                    persistenceService.saveEnrichedElement(itemDetail, cleansedDataEntry, result, "ENRICHED");
+                }
+            }
+        } catch (ThrottledException te) {
+            throw te;
+        } catch (Exception e) {
+            throw e;
         }
     }
 

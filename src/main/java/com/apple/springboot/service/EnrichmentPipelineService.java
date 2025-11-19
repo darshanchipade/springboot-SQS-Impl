@@ -119,12 +119,14 @@ public class EnrichmentPipelineService {
         logger.info("Split {} items into {} to queue and {} to skip enrichment for CleansedDataStore ID {}.",
                 changedItems.size(), itemsToQueue.size(), skippedItems.size(), cleansedDataStoreId);
 
-        logger.info("Starting completion tracking for CleansedDataStore ID {} with {} total items (including skipped).",
-                cleansedDataStoreId, changedItems.size());
-        completionService.startTracking(cleansedDataStoreId, changedItems.size());
+        if (useSqs) {
+            logger.info("Starting completion tracking for CleansedDataStore ID {} with {} total items (including skipped).",
+                    cleansedDataStoreId, changedItems.size());
+            completionService.startTracking(cleansedDataStoreId, changedItems.size());
+        }
 
         for (CleansedItemDetail skipped : skippedItems) {
-            handleSkippedItem(skipped, cleansedDataEntry);
+            handleSkippedItem(skipped, cleansedDataEntry, useSqs);
         }
 
         if (itemsToQueue.isEmpty()) {
@@ -152,21 +154,26 @@ public class EnrichmentPipelineService {
             logger.info("SQS disabled; running enrichment inline for {} items.", messages.size());
             for (EnrichmentMessage message : messages) {
                 try {
-                    enrichmentProcessor.process(message);
+                    enrichmentProcessor.processInline(message.getCleansedItemDetail(), cleansedDataEntry);
                 } catch (Exception ex) {
-                    logger.error("Inline enrichment failed for message {}: {}", message.getCleansedDataStoreId(), ex.getMessage(), ex);
+                    logger.error("Inline enrichment failed for {}::{} - {}", message.getCleansedItemDetail().sourcePath, message.getCleansedItemDetail().originalFieldName, ex.getMessage(), ex);
                 }
             }
+            enrichmentProcessor.finalizeInline(cleansedDataEntry);
         }
 
         logger.info("{} items were dispatched for enrichment for CleansedDataStore ID: {}", itemsToQueue.size(), cleansedDataEntry.getId());
     }
 
-    private void handleSkippedItem(CleansedItemDetail itemDetail, CleansedDataStore cleansedDataEntry) {
+    private void handleSkippedItem(CleansedItemDetail itemDetail, CleansedDataStore cleansedDataEntry, boolean trackCompletion) {
         try {
             persistenceService.saveSkippedEnrichedElement(itemDetail, cleansedDataEntry, "ENRICHMENT_SKIPPED");
         } catch (Exception e) {
             logger.error("Failed to persist skipped enrichment item for {}::{}: {}", itemDetail.sourcePath, itemDetail.originalFieldName, e.getMessage(), e);
+        }
+
+        if (!trackCompletion) {
+            return;
         }
 
         try {
