@@ -27,6 +27,7 @@ public class EnrichmentPipelineService {
     private final EnrichmentCompletionService completionService;
     private final EnrichmentProcessor enrichmentProcessor;
     private final EnrichmentPersistenceService persistenceService;
+    private final EnrichmentProgressService progressService;
     private final boolean useSqs;
 
     public EnrichmentPipelineService(CleansedDataStoreRepository cleansedDataStoreRepository,
@@ -36,6 +37,7 @@ public class EnrichmentPipelineService {
                                      EnrichmentCompletionService completionService,
                                      EnrichmentProcessor enrichmentProcessor,
                                      EnrichmentPersistenceService persistenceService,
+                                     EnrichmentProgressService progressService,
                                      @Value("${app.enrichment.use-sqs:true}") boolean useSqs) {
         this.cleansedDataStoreRepository = cleansedDataStoreRepository;
         this.enrichedContentElementRepository = enrichedContentElementRepository;
@@ -44,6 +46,7 @@ public class EnrichmentPipelineService {
         this.completionService = completionService;
         this.enrichmentProcessor = enrichmentProcessor;
         this.persistenceService = persistenceService;
+        this.progressService = progressService;
         this.useSqs = useSqs;
     }
 
@@ -118,6 +121,7 @@ public class EnrichmentPipelineService {
 
         logger.info("Split {} items into {} to queue and {} to skip enrichment for CleansedDataStore ID {}.",
                 changedItems.size(), itemsToQueue.size(), skippedItems.size(), cleansedDataStoreId);
+        progressService.startTracking(cleansedDataStoreId, changedItems.size());
 
         if (useSqs) {
             logger.info("Starting completion tracking for CleansedDataStore ID {} with {} total items (including skipped).",
@@ -133,6 +137,7 @@ public class EnrichmentPipelineService {
             logger.info("All {} items were skipped for enrichment for CleansedDataStore ID {}.", changedItems.size(), cleansedDataStoreId);
             cleansedDataEntry.setStatus("ENRICHMENT_SKIPPED");
             cleansedDataStoreRepository.save(cleansedDataEntry);
+            progressService.complete(cleansedDataStoreId);
             return;
         }
 
@@ -171,6 +176,8 @@ public class EnrichmentPipelineService {
         } catch (Exception e) {
             logger.error("Failed to persist skipped enrichment item for {}::{}: {}", itemDetail.sourcePath, itemDetail.originalFieldName, e.getMessage(), e);
         }
+
+        progressService.increment(cleansedDataEntry.getId(), itemDetail.originalFieldName + " (skipped)");
 
         if (!trackCompletion) {
             return;

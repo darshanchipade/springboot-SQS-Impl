@@ -39,6 +39,7 @@ public class EnrichmentProcessor {
     private final AIResponseValidator aiResponseValidator;
     private final ObjectMapper objectMapper;
     private final EnrichmentCompletionService completionService;
+    private final EnrichmentProgressService progressService;
     @Value("${app.enrichment.computeItemVector:false}")
     private boolean computeItemVector;
 
@@ -52,10 +53,11 @@ public class EnrichmentProcessor {
                                RateLimiter bedrockRateLimiter,
                                @Qualifier("chatRateLimiter") RateLimiter chatRateLimiter,
                                @Qualifier("embedRateLimiter") RateLimiter embedRateLimiter,
-                               EnrichmentPersistenceService persistenceService,
-                               AIResponseValidator aiResponseValidator,
-                               ObjectMapper objectMapper,
-                               EnrichmentCompletionService completionService) {
+                                 EnrichmentPersistenceService persistenceService,
+                                 AIResponseValidator aiResponseValidator,
+                                 ObjectMapper objectMapper,
+                                 EnrichmentCompletionService completionService,
+                                 EnrichmentProgressService progressService) {
         this.bedrockEnrichmentService = bedrockEnrichmentService;
         this.cleansedDataStoreRepository = cleansedDataStoreRepository;
         this.enrichedContentElementRepository = enrichedContentElementRepository;
@@ -69,6 +71,7 @@ public class EnrichmentProcessor {
         this.aiResponseValidator = aiResponseValidator;
         this.objectMapper = objectMapper;
         this.completionService = completionService;
+        this.progressService = progressService;
     }
 
     public void process(EnrichmentMessage message) {
@@ -99,6 +102,7 @@ public class EnrichmentProcessor {
             if (!shouldRecordCompletion) {
                 logger.debug("Skipping completion bookkeeping for {} due to throttling retry.", cleansedDataEntry.getId());
             } else {
+                progressService.increment(cleansedDataEntry.getId(), itemDetail.originalFieldName);
                 try {
                     boolean allDone = completionService.itemCompleted(cleansedDataEntry.getId());
                     if (allDone) {
@@ -142,6 +146,8 @@ public class EnrichmentProcessor {
             persistenceService.saveErrorEnrichedElement(itemDetail, cleansedDataEntry, "ERROR_ENRICHMENT_FAILED", "Throttled during inline processing");
         } catch (Exception e) {
             persistenceService.saveErrorEnrichedElement(itemDetail, cleansedDataEntry, "ERROR_UNEXPECTED", e.getMessage());
+        } finally {
+            progressService.increment(cleansedDataEntry.getId(), itemDetail.originalFieldName);
         }
     }
 
@@ -191,6 +197,7 @@ public class EnrichmentProcessor {
             contentChunkRepository.saveAll(chunkBatch);
         }
         updateFinalCleansedDataStatus(cleansedDataEntry);
+        progressService.complete(cleansedDataEntry.getId());
     }
 
     private boolean acquireFinalizationLock(CleansedDataStore cleansedDataEntry) {
