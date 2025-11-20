@@ -267,6 +267,8 @@ public class EnrichmentProcessor {
         long errorCount = enrichedContentElementRepository.countByCleansedDataIdAndStatusContaining(cleansedDataEntry.getId(), "ERROR");
         long successCount = enrichedContentElementRepository.countByCleansedDataIdAndStatus(cleansedDataEntry.getId(), "ENRICHED");
         long skippedCount = enrichedContentElementRepository.countByCleansedDataIdAndStatusContaining(cleansedDataEntry.getId(), "SKIPPED");
+        logger.info("Status counts for {} -> success={}, skipped={}, error={}",
+                cleansedDataEntry.getId(), successCount, skippedCount, errorCount);
 
         String finalStatus;
         if (errorCount == 0) {
