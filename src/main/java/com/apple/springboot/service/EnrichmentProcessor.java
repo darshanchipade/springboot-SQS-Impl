@@ -264,9 +264,21 @@ public class EnrichmentProcessor {
     }
 
     private void updateFinalCleansedDataStatus(CleansedDataStore cleansedDataEntry) {
-        long errorCount = enrichedContentElementRepository.countByCleansedDataIdAndStatusContaining(cleansedDataEntry.getId(), "ERROR");
-        long successCount = enrichedContentElementRepository.countByCleansedDataIdAndStatusIgnoreCase(cleansedDataEntry.getId(), "ENRICHED");
-        long skippedCount = enrichedContentElementRepository.countByCleansedDataIdAndStatusContaining(cleansedDataEntry.getId(), "SKIPPED");
+        Long successCount = (Long) entityManager.createNativeQuery(
+                        "select coalesce(sum(case when upper(status) = 'ENRICHED' then 1 else 0 end),0) " +
+                                "from enriched_content_elements where cleansed_data_id = :id")
+                .setParameter("id", cleansedDataEntry.getId())
+                .getSingleResult();
+        Long skippedCount = (Long) entityManager.createNativeQuery(
+                        "select coalesce(sum(case when upper(status) like '%SKIPPED%' then 1 else 0 end),0) " +
+                                "from enriched_content_elements where cleansed_data_id = :id")
+                .setParameter("id", cleansedDataEntry.getId())
+                .getSingleResult();
+        Long errorCount = (Long) entityManager.createNativeQuery(
+                        "select coalesce(sum(case when upper(status) like 'ERROR%' then 1 else 0 end),0) " +
+                                "from enriched_content_elements where cleansed_data_id = :id")
+                .setParameter("id", cleansedDataEntry.getId())
+                .getSingleResult();
         logger.info("Status counts for {} -> success={}, skipped={}, error={}",
                 cleansedDataEntry.getId(), successCount, skippedCount, errorCount);
 
