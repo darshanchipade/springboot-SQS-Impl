@@ -269,21 +269,25 @@ public class EnrichmentProcessor {
 
     private void updateFinalCleansedDataStatus(CleansedDataStore cleansedDataEntry) {
         entityManager.flush();
-        Long successCount = (Long) entityManager.createNativeQuery(
-                        "select coalesce(sum(case when upper(status) = 'ENRICHED' then 1 else 0 end),0) " +
-                                "from enriched_content_elements where cleansed_data_id = :id")
+        @SuppressWarnings("unchecked")
+        List<Object[]> statusCounts = entityManager.createNativeQuery(
+                        "select upper(status) as status, count(*) as cnt " +
+                                "from enriched_content_elements where cleansed_data_id = :id group by upper(status)")
                 .setParameter("id", cleansedDataEntry.getId())
-                .getSingleResult();
-        Long skippedCount = (Long) entityManager.createNativeQuery(
-                        "select coalesce(sum(case when upper(status) like '%SKIPPED%' then 1 else 0 end),0) " +
-                                "from enriched_content_elements where cleansed_data_id = :id")
-                .setParameter("id", cleansedDataEntry.getId())
-                .getSingleResult();
-        Long errorCount = (Long) entityManager.createNativeQuery(
-                        "select coalesce(sum(case when upper(status) like 'ERROR%' then 1 else 0 end),0) " +
-                                "from enriched_content_elements where cleansed_data_id = :id")
-                .setParameter("id", cleansedDataEntry.getId())
-                .getSingleResult();
+                .getResultList();
+
+        long successCount = statusCounts.stream()
+                .filter(row -> "ENRICHED".equals(row[0]))
+                .mapToLong(row -> ((Number) row[1]).longValue())
+                .sum();
+        long skippedCount = statusCounts.stream()
+                .filter(row -> row[0] instanceof String s && s.contains("SKIPPED"))
+                .mapToLong(row -> ((Number) row[1]).longValue())
+                .sum();
+        long errorCount = statusCounts.stream()
+                .filter(row -> row[0] instanceof String s && s.startsWith("ERROR"))
+                .mapToLong(row -> ((Number) row[1]).longValue())
+                .sum();
         logger.info("Status counts for {} -> success={}, skipped={}, error={}",
                 cleansedDataEntry.getId(), successCount, skippedCount, errorCount);
 
