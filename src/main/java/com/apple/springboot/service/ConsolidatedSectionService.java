@@ -41,7 +41,7 @@ public class ConsolidatedSectionService {
         this.entityManager = entityManager;
     }
 
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
     public void saveFromCleansedEntry(CleansedDataStore cleansedData) {
         // Build an index of all usagePaths per (sourcePath, originalFieldName) from the cleansed items
         Map<String, Set<String>> usageIndex = buildUsageIndex(cleansedData);
