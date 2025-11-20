@@ -141,11 +141,15 @@ public class EnrichmentProcessor {
     }
 
     public void finalizeInline(CleansedDataStore cleansedDataEntry) {
-        runFinalizationSteps(cleansedDataEntry);
+        runFinalizationSteps(cleansedDataEntry, true);
     }
 
     public void runFinalizationSteps(CleansedDataStore cleansedDataEntry) {
-        finalizationService.finalizeCleansedData(cleansedDataEntry);
+        runFinalizationSteps(cleansedDataEntry, false);
+    }
+
+    private void runFinalizationSteps(CleansedDataStore cleansedDataEntry, boolean allowInlineLockBypass) {
+        finalizationService.finalizeCleansedData(cleansedDataEntry, allowInlineLockBypass);
     }
 
     private void throttleFor(RateLimiter... limiters) {
