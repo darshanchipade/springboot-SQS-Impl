@@ -268,6 +268,7 @@ public class EnrichmentProcessor {
     }
 
     private void updateFinalCleansedDataStatus(CleansedDataStore cleansedDataEntry) {
+        entityManager.flush();
         Long successCount = (Long) entityManager.createNativeQuery(
                         "select coalesce(sum(case when upper(status) = 'ENRICHED' then 1 else 0 end),0) " +
                                 "from enriched_content_elements where cleansed_data_id = :id")
