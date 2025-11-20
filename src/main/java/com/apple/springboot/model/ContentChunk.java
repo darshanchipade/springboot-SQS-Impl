@@ -60,4 +60,8 @@ public class ContentChunk {
     @Array(length = 1024)
     @Column(name = "vector", columnDefinition = "vector(1024)")
     private float[] vector;
+
+    @Builder.Default
+    @Column(name = "row_version", nullable = false)
+    private Long rowVersion = 0L;
 }
