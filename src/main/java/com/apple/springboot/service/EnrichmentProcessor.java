@@ -14,6 +14,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import jakarta.persistence.EntityManager;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -39,6 +40,8 @@ public class EnrichmentProcessor {
     private final AIResponseValidator aiResponseValidator;
     private final ObjectMapper objectMapper;
     private final EnrichmentCompletionService completionService;
+    private final EntityManager entityManager;
+    private final EnrichmentProgressService progressService;
     @Value("${app.enrichment.computeItemVector:false}")
     private boolean computeItemVector;
 
@@ -55,7 +58,9 @@ public class EnrichmentProcessor {
                                EnrichmentPersistenceService persistenceService,
                                AIResponseValidator aiResponseValidator,
                                ObjectMapper objectMapper,
-                               EnrichmentCompletionService completionService) {
+                               EnrichmentCompletionService completionService,
+                               EntityManager entityManager,
+                               EnrichmentProgressService progressService) {
         this.bedrockEnrichmentService = bedrockEnrichmentService;
         this.cleansedDataStoreRepository = cleansedDataStoreRepository;
         this.enrichedContentElementRepository = enrichedContentElementRepository;
@@ -69,6 +74,8 @@ public class EnrichmentProcessor {
         this.aiResponseValidator = aiResponseValidator;
         this.objectMapper = objectMapper;
         this.completionService = completionService;
+        this.entityManager = entityManager;
+        this.progressService = progressService;
     }
 
     public void process(EnrichmentMessage message) {
@@ -88,32 +95,7 @@ public class EnrichmentProcessor {
         }
 
         try {
-            // Proceed without per-run idempotency skip; queuing logic prevents duplicates
-            Map<String, String> itemContent = new HashMap<>();
-            itemContent.put("cleansedContent", itemDetail.cleansedContent);
-            JsonNode itemJson = objectMapper.valueToTree(itemContent);
-
-            Map<String, Object> result = bedrockEnrichmentService.enrichItem(itemJson, itemDetail.context);
-
-            if (result.containsKey("error")) {
-                String msg = "Bedrock enrichment failed: " + result.get("error");
-                persistenceService.saveErrorEnrichedElement(itemDetail, cleansedDataEntry, "ERROR_ENRICHMENT_FAILED", msg);
-            } else {
-                Map<String, Object> ctx = objectMapper.convertValue(itemDetail.context, new com.fasterxml.jackson.core.type.TypeReference<>() {
-                });
-                ctx.put("fullContextId", itemDetail.sourcePath + "::" + itemDetail.originalFieldName);
-                ctx.put("sourcePath", itemDetail.sourcePath);
-                Map<String, Object> prov = new HashMap<>();
-                prov.put("modelId", bedrockEnrichmentService.getConfiguredModelId());
-                ctx.put("provenance", prov);
-                result.put("context", ctx);
-
-                if (!aiResponseValidator.isValid(result)) {
-                    persistenceService.saveErrorEnrichedElement(itemDetail, cleansedDataEntry, "ERROR_VALIDATION_FAILED", "Invalid AI response");
-                } else {
-                    persistenceService.saveEnrichedElement(itemDetail, cleansedDataEntry, result, "ENRICHED");
-                }
-            }
+            performEnrichment(itemDetail, cleansedDataEntry);
         } catch (ThrottledException te) {
             shouldRecordCompletion = false;
             logger.warn("Bedrock throttled for item {}::{}, re-queueing message.", itemDetail.sourcePath, itemDetail.originalFieldName);
@@ -124,6 +106,7 @@ public class EnrichmentProcessor {
             if (!shouldRecordCompletion) {
                 logger.debug("Skipping completion bookkeeping for {} due to throttling retry.", cleansedDataEntry.getId());
             } else {
+                progressService.increment(cleansedDataEntry.getId(), itemDetail.originalFieldName);
                 try {
                     boolean allDone = completionService.itemCompleted(cleansedDataEntry.getId());
                     if (allDone) {
@@ -158,6 +141,24 @@ public class EnrichmentProcessor {
         }
     }
 
+    public void processInline(CleansedItemDetail itemDetail, CleansedDataStore cleansedDataEntry) {
+        throttleFor(bedrockRateLimiter, chatRateLimiter);
+        try {
+            performEnrichment(itemDetail, cleansedDataEntry);
+        } catch (ThrottledException te) {
+            logger.warn("Inline enrichment throttled for {}::{}, marking as error: {}", itemDetail.sourcePath, itemDetail.originalFieldName, te.getMessage());
+            persistenceService.saveErrorEnrichedElement(itemDetail, cleansedDataEntry, "ERROR_ENRICHMENT_FAILED", "Throttled during inline processing");
+        } catch (Exception e) {
+            persistenceService.saveErrorEnrichedElement(itemDetail, cleansedDataEntry, "ERROR_UNEXPECTED", e.getMessage());
+        } finally {
+            progressService.increment(cleansedDataEntry.getId(), itemDetail.originalFieldName);
+        }
+    }
+
+    public void finalizeInline(CleansedDataStore cleansedDataEntry) {
+        runFinalizationSteps(cleansedDataEntry);
+    }
+
     @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
     public void runFinalizationSteps(CleansedDataStore cleansedDataEntry) {
         if (!acquireFinalizationLock(cleansedDataEntry)) {
@@ -168,7 +169,7 @@ public class EnrichmentProcessor {
 
         List<ConsolidatedEnrichedSection> savedSections = consolidatedSectionService.getSectionsFor(cleansedDataEntry);
         contentChunkRepository.deleteByCleansedDataId(cleansedDataEntry.getId());
-        final int BATCH_SIZE =300;
+        final int BATCH_SIZE = 100;
         List<ContentChunk> chunkBatch = new ArrayList<>();
         for (ConsolidatedEnrichedSection section : savedSections) {
             List<String> chunks = textChunkingService.chunkIfNeeded(section.getCleansedText());
@@ -200,6 +201,7 @@ public class EnrichmentProcessor {
             contentChunkRepository.saveAll(chunkBatch);
         }
         updateFinalCleansedDataStatus(cleansedDataEntry);
+        progressService.complete(cleansedDataEntry.getId());
     }
 
     private boolean acquireFinalizationLock(CleansedDataStore cleansedDataEntry) {
@@ -232,10 +234,62 @@ public class EnrichmentProcessor {
         }
     }
 
+    private void performEnrichment(CleansedItemDetail itemDetail, CleansedDataStore cleansedDataEntry) throws Exception {
+        try {
+            Map<String, String> itemContent = new HashMap<>();
+            itemContent.put("cleansedContent", itemDetail.cleansedContent);
+            JsonNode itemJson = objectMapper.valueToTree(itemContent);
+
+            Map<String, Object> result = bedrockEnrichmentService.enrichItem(itemJson, itemDetail.context);
+
+            if (result.containsKey("error")) {
+                String msg = "Bedrock enrichment failed: " + result.get("error");
+                persistenceService.saveErrorEnrichedElement(itemDetail, cleansedDataEntry, "ERROR_ENRICHMENT_FAILED", msg);
+            } else {
+                Map<String, Object> ctx = objectMapper.convertValue(itemDetail.context, new com.fasterxml.jackson.core.type.TypeReference<>() {});
+                ctx.put("fullContextId", itemDetail.sourcePath + "::" + itemDetail.originalFieldName);
+                ctx.put("sourcePath", itemDetail.sourcePath);
+                Map<String, Object> prov = new HashMap<>();
+                prov.put("modelId", bedrockEnrichmentService.getConfiguredModelId());
+                ctx.put("provenance", prov);
+                result.put("context", ctx);
+
+                if (!aiResponseValidator.isValid(result)) {
+                    persistenceService.saveErrorEnrichedElement(itemDetail, cleansedDataEntry, "ERROR_VALIDATION_FAILED", "Invalid AI response");
+                } else {
+                    persistenceService.saveEnrichedElement(itemDetail, cleansedDataEntry, result, "ENRICHED");
+                }
+            }
+        } catch (ThrottledException te) {
+            throw te;
+        } catch (Exception e) {
+            throw e;
+        }
+    }
+
     private void updateFinalCleansedDataStatus(CleansedDataStore cleansedDataEntry) {
-        long errorCount = enrichedContentElementRepository.countByCleansedDataIdAndStatusContaining(cleansedDataEntry.getId(), "ERROR");
-        long successCount = enrichedContentElementRepository.countByCleansedDataIdAndStatus(cleansedDataEntry.getId(), "ENRICHED");
-        long skippedCount = enrichedContentElementRepository.countByCleansedDataIdAndStatusContaining(cleansedDataEntry.getId(), "SKIPPED");
+        entityManager.flush();
+        @SuppressWarnings("unchecked")
+        List<Object[]> statusCounts = entityManager.createNativeQuery(
+                        "select upper(status) as status, count(*) as cnt " +
+                                "from enriched_content_elements where cleansed_data_id = :id group by upper(status)")
+                .setParameter("id", cleansedDataEntry.getId())
+                .getResultList();
+
+        long successCount = statusCounts.stream()
+                .filter(row -> "ENRICHED".equals(row[0]))
+                .mapToLong(row -> ((Number) row[1]).longValue())
+                .sum();
+        long skippedCount = statusCounts.stream()
+                .filter(row -> row[0] instanceof String s && s.contains("SKIPPED"))
+                .mapToLong(row -> ((Number) row[1]).longValue())
+                .sum();
+        long errorCount = statusCounts.stream()
+                .filter(row -> row[0] instanceof String s && s.startsWith("ERROR"))
+                .mapToLong(row -> ((Number) row[1]).longValue())
+                .sum();
+        logger.info("Status counts for {} -> success={}, skipped={}, error={}",
+                cleansedDataEntry.getId(), successCount, skippedCount, errorCount);
 
         String finalStatus;
         if (errorCount == 0) {

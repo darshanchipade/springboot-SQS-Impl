@@ -12,7 +12,7 @@ import java.util.UUID;
 public interface EnrichedContentElementRepository extends JpaRepository<EnrichedContentElement, UUID> {
     long countByCleansedDataId(UUID cleansedDataId);
     long countByCleansedDataIdAndStatusContaining(UUID cleansedDataId, String status);
-    long countByCleansedDataIdAndStatus(UUID cleansedDataId, String status);
+    long countByCleansedDataIdAndStatusIgnoreCase(UUID cleansedDataId, String status);
     List<EnrichedContentElement> findAllByCleansedDataId(UUID cleansedDataId);
     boolean existsByItemSourcePathAndItemOriginalFieldNameAndStatus(String sourcePath, String fieldName, String status);
     boolean existsByItemSourcePathAndItemOriginalFieldNameAndCleansedText(String sourcePath, String fieldName, String cleansedText);

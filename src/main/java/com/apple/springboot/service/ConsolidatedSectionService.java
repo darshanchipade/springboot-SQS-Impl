@@ -6,6 +6,7 @@ import com.apple.springboot.model.EnrichedContentElement;
 import com.apple.springboot.repository.ConsolidatedEnrichedSectionRepository;
 import com.apple.springboot.repository.ContentHashRepository;
 import com.apple.springboot.repository.EnrichedContentElementRepository;
+import jakarta.persistence.EntityManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -27,23 +28,31 @@ public class ConsolidatedSectionService {
     private final EnrichedContentElementRepository enrichedRepo;
     private final ConsolidatedEnrichedSectionRepository consolidatedRepo;
     private final ContentHashRepository contentHashRepository;
+    private final EntityManager entityManager;
     private static final String USAGE_REF_DELIM = " ::ref:: ";
 
     public ConsolidatedSectionService(EnrichedContentElementRepository enrichedRepo,
                                       ConsolidatedEnrichedSectionRepository consolidatedRepo,
-                                      ContentHashRepository contentHashRepository) {
+                                      ContentHashRepository contentHashRepository,
+                                      EntityManager entityManager) {
         this.enrichedRepo = enrichedRepo;
         this.consolidatedRepo = consolidatedRepo;
         this.contentHashRepository = contentHashRepository;
+        this.entityManager = entityManager;
     }
 
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
     public void saveFromCleansedEntry(CleansedDataStore cleansedData) {
         // Build an index of all usagePaths per (sourcePath, originalFieldName) from the cleansed items
         Map<String, Set<String>> usageIndex = buildUsageIndex(cleansedData);
 
         List<EnrichedContentElement> enrichedItems = enrichedRepo.findAllByCleansedDataId(cleansedData.getId());
         logger.info("Found {} enriched items for CleansedDataStore ID: {} to consolidate.", enrichedItems.size(), cleansedData.getId());
+        List<Object[]> counts = entityManager.createNativeQuery(
+                        "select status, count(*) from enriched_content_elements where cleansed_data_id = :id group by status")
+                .setParameter("id", cleansedData.getId())
+                .getResultList();
+        logger.info("Debug: DB counts for {} -> {}", cleansedData.getId(), counts);
 
         for (EnrichedContentElement item : enrichedItems) {
             if (item.getItemSourcePath() == null || item.getCleansedText() == null) {
@@ -110,11 +119,7 @@ public class ConsolidatedSectionService {
         if (cleansedData == null || cleansedData.getId() == null) {
             return Collections.emptyList();
         }
-        if (cleansedData.getVersion() == null) {
-            return consolidatedRepo.findAllByCleansedDataId(cleansedData.getId());
-        }
-        return consolidatedRepo.findAllByCleansedDataIdAndVersion(
-                cleansedData.getId(), cleansedData.getVersion());
+        return consolidatedRepo.findAllByCleansedDataId(cleansedData.getId());
     }
 
     @SuppressWarnings("unchecked")

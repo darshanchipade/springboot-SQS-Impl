@@ -1,10 +1,12 @@
 package com.apple.springboot.service;
 
+import com.apple.springboot.service.CleansedItemDetail;
 import com.apple.springboot.model.CleansedDataStore;
 import com.apple.springboot.model.EnrichedContentElement;
 import com.apple.springboot.repository.EnrichedContentElementRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.persistence.EntityManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -25,10 +27,14 @@ public class EnrichmentPersistenceService {
 
     private final EnrichedContentElementRepository enrichedContentElementRepository;
     private final ObjectMapper objectMapper;
+    private final EntityManager entityManager;
 
-    public EnrichmentPersistenceService(EnrichedContentElementRepository enrichedContentElementRepository, ObjectMapper objectMapper) {
+    public EnrichmentPersistenceService(EnrichedContentElementRepository enrichedContentElementRepository,
+                                        ObjectMapper objectMapper,
+                                        EntityManager entityManager) {
         this.enrichedContentElementRepository = enrichedContentElementRepository;
         this.objectMapper = objectMapper;
+        this.entityManager = entityManager;
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -75,6 +81,8 @@ public class EnrichmentPersistenceService {
         }
 
         enrichedContentElementRepository.save(enrichedElement);
+        entityManager.flush();
+        logger.info("Persisted {} status for CleansedDataStore ID {}", elementStatus, parentEntry.getId());
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -108,6 +116,7 @@ public class EnrichmentPersistenceService {
         }
 
         enrichedContentElementRepository.save(errorElement);
+        entityManager.flush();
         logger.debug("Saved error element for item path: {}", itemDetail.sourcePath);
     }
 
@@ -144,6 +153,7 @@ public class EnrichmentPersistenceService {
         }
 
         enrichedContentElementRepository.save(skippedElement);
+        entityManager.flush();
         logger.debug("Saved skipped enrichment element for item path: {}", itemDetail.sourcePath);
     }
 }
