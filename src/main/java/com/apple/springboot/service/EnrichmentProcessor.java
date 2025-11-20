@@ -14,6 +14,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import jakarta.persistence.EntityManager;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -39,6 +40,7 @@ public class EnrichmentProcessor {
     private final AIResponseValidator aiResponseValidator;
     private final ObjectMapper objectMapper;
     private final EnrichmentCompletionService completionService;
+    private final EntityManager entityManager;
     private final EnrichmentProgressService progressService;
     @Value("${app.enrichment.computeItemVector:false}")
     private boolean computeItemVector;
@@ -57,6 +59,7 @@ public class EnrichmentProcessor {
                                  AIResponseValidator aiResponseValidator,
                                  ObjectMapper objectMapper,
                                  EnrichmentCompletionService completionService,
+                                 EntityManager entityManager,
                                  EnrichmentProgressService progressService) {
         this.bedrockEnrichmentService = bedrockEnrichmentService;
         this.cleansedDataStoreRepository = cleansedDataStoreRepository;
@@ -71,6 +74,7 @@ public class EnrichmentProcessor {
         this.aiResponseValidator = aiResponseValidator;
         this.objectMapper = objectMapper;
         this.completionService = completionService;
+        this.entityManager = entityManager;
         this.progressService = progressService;
     }
 
