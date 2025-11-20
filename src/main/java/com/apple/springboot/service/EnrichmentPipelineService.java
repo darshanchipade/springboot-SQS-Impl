@@ -11,6 +11,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -157,28 +159,40 @@ public class EnrichmentPipelineService {
             }
         } else {
             logger.info("SQS disabled; running enrichment inline for {} items.", messages.size());
-            boolean hasErrors = false;
             for (EnrichmentMessage message : messages) {
                 try {
                     enrichmentProcessor.processInline(message.getCleansedItemDetail(), cleansedDataEntry);
                 } catch (Exception ex) {
                     logger.error("Inline enrichment failed for {}::{} - {}", message.getCleansedItemDetail().sourcePath, message.getCleansedItemDetail().originalFieldName, ex.getMessage(), ex);
-                    hasErrors = true;
                 }
             }
-            enrichmentProcessor.finalizeInline(cleansedDataEntry);
-            if (hasErrors) {
-                cleansedDataEntry.setStatus("PARTIALLY_ENRICHED");
-            } else {
-                cleansedDataEntry.setStatus("ENRICHED_COMPLETE");
-            }
-            cleansedDataStoreRepository.save(cleansedDataEntry);
-            logger.info("Inline enrichment complete for CleansedDataStore ID: {} with final status: {}", cleansedDataEntry.getId(), cleansedDataEntry.getStatus());
-            progressService.complete(cleansedDataStoreId);
+              scheduleInlineFinalization(cleansedDataEntry);
             return;
         }
 
         logger.info("{} items were dispatched for enrichment for CleansedDataStore ID: {}", itemsToQueue.size(), cleansedDataEntry.getId());
+    }
+
+    private void scheduleInlineFinalization(CleansedDataStore cleansedDataEntry) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            runInlineFinalizationImmediately(cleansedDataEntry);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                runInlineFinalizationImmediately(cleansedDataEntry);
+            }
+        });
+    }
+
+    private void runInlineFinalizationImmediately(CleansedDataStore cleansedDataEntry) {
+        try {
+            enrichmentProcessor.finalizeInline(cleansedDataEntry);
+            logger.info("Inline enrichment complete for CleansedDataStore ID: {}", cleansedDataEntry.getId());
+        } catch (Exception e) {
+            logger.error("Inline finalization failed for CleansedDataStore ID: {}", cleansedDataEntry.getId(), e);
+        }
     }
 
     private void handleSkippedItem(CleansedItemDetail itemDetail, CleansedDataStore cleansedDataEntry, boolean trackCompletion) {
