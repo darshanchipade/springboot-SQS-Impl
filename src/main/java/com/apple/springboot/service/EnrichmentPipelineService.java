@@ -157,15 +157,21 @@ public class EnrichmentPipelineService {
             }
         } else {
             logger.info("SQS disabled; running enrichment inline for {} items.", messages.size());
+            boolean hasErrors = false;
             for (EnrichmentMessage message : messages) {
                 try {
                     enrichmentProcessor.processInline(message.getCleansedItemDetail(), cleansedDataEntry);
                 } catch (Exception ex) {
                     logger.error("Inline enrichment failed for {}::{} - {}", message.getCleansedItemDetail().sourcePath, message.getCleansedItemDetail().originalFieldName, ex.getMessage(), ex);
+                    hasErrors = true;
                 }
             }
             enrichmentProcessor.finalizeInline(cleansedDataEntry);
-            // Inline mode has already finalized; set final status here
+            if (hasErrors) {
+                cleansedDataEntry.setStatus("PARTIALLY_ENRICHED");
+            } else {
+                cleansedDataEntry.setStatus("ENRICHED_COMPLETE");
+            }
             cleansedDataStoreRepository.save(cleansedDataEntry);
             logger.info("Inline enrichment complete for CleansedDataStore ID: {} with final status: {}", cleansedDataEntry.getId(), cleansedDataEntry.getStatus());
             progressService.complete(cleansedDataStoreId);
