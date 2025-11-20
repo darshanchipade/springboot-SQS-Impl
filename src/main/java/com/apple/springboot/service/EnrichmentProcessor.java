@@ -265,7 +265,7 @@ public class EnrichmentProcessor {
 
     private void updateFinalCleansedDataStatus(CleansedDataStore cleansedDataEntry) {
         long errorCount = enrichedContentElementRepository.countByCleansedDataIdAndStatusContaining(cleansedDataEntry.getId(), "ERROR");
-        long successCount = enrichedContentElementRepository.countByCleansedDataIdAndStatus(cleansedDataEntry.getId(), "ENRICHED");
+        long successCount = enrichedContentElementRepository.countByCleansedDataIdAndStatusIgnoreCase(cleansedDataEntry.getId(), "ENRICHED");
         long skippedCount = enrichedContentElementRepository.countByCleansedDataIdAndStatusContaining(cleansedDataEntry.getId(), "SKIPPED");
         logger.info("Status counts for {} -> success={}, skipped={}, error={}",
                 cleansedDataEntry.getId(), successCount, skippedCount, errorCount);
