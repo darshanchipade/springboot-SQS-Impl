@@ -165,6 +165,11 @@ public class EnrichmentPipelineService {
                 }
             }
             enrichmentProcessor.finalizeInline(cleansedDataEntry);
+            // Inline mode has already finalized; set final status here
+            cleansedDataStoreRepository.save(cleansedDataEntry);
+            logger.info("Inline enrichment complete for CleansedDataStore ID: {} with final status: {}", cleansedDataEntry.getId(), cleansedDataEntry.getStatus());
+            progressService.complete(cleansedDataStoreId);
+            return;
         }
 
         logger.info("{} items were dispatched for enrichment for CleansedDataStore ID: {}", itemsToQueue.size(), cleansedDataEntry.getId());
