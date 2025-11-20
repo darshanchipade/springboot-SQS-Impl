@@ -82,6 +82,7 @@ public class EnrichmentPersistenceService {
 
         enrichedContentElementRepository.save(enrichedElement);
         entityManager.flush();
+        logRowCount(parentEntry.getId(), "saveEnrichedElement");
         logger.info("Persisted {} status for CleansedDataStore ID {}", elementStatus, parentEntry.getId());
     }
 
@@ -117,6 +118,7 @@ public class EnrichmentPersistenceService {
 
         enrichedContentElementRepository.save(errorElement);
         entityManager.flush();
+        logRowCount(parentEntry.getId(), "saveErrorEnrichedElement");
         logger.debug("Saved error element for item path: {}", itemDetail.sourcePath);
     }
 
@@ -154,6 +156,18 @@ public class EnrichmentPersistenceService {
 
         enrichedContentElementRepository.save(skippedElement);
         entityManager.flush();
+        logRowCount(parentEntry.getId(), "saveSkippedEnrichedElement");
         logger.debug("Saved skipped enrichment element for item path: {}", itemDetail.sourcePath);
+    }
+
+    private void logRowCount(UUID cleansedDataId, String context) {
+        if (cleansedDataId == null) {
+            return;
+        }
+        Long count = entityManager.createQuery(
+                        "select count(e.id) from EnrichedContentElement e where e.cleansedDataId = :id", Long.class)
+                .setParameter("id", cleansedDataId)
+                .getSingleResult();
+        logger.info("EnrichedContentElements persisted for {} after {}: {}", cleansedDataId, context, count);
     }
 }
