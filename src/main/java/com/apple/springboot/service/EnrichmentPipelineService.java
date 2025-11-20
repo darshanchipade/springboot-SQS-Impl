@@ -1,6 +1,7 @@
 package com.apple.springboot.service;
 
 import com.apple.springboot.model.CleansedDataStore;
+import com.apple.springboot.model.CleansedItemDetail;
 import com.apple.springboot.model.EnrichmentContext;
 import com.apple.springboot.model.EnrichmentMessage;
 import com.apple.springboot.repository.CleansedDataStoreRepository;

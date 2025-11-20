@@ -1,7 +1,5 @@
 package com.apple.springboot.model;
 
-import com.apple.springboot.service.CleansedItemDetail;
-
 import java.util.UUID;
 
 public class EnrichmentMessage {

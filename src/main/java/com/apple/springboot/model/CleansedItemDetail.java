@@ -1,6 +1,4 @@
-package com.apple.springboot.service;
-
-import com.apple.springboot.model.EnrichmentContext;
+package com.apple.springboot.model;
 
 public class CleansedItemDetail {
     public final String sourcePath;
