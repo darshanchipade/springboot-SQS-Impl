@@ -82,6 +82,7 @@ public class EnrichmentPersistenceService {
 
         enrichedContentElementRepository.save(enrichedElement);
         entityManager.flush();
+        logger.info("Persisted {} status for CleansedDataStore ID {}", elementStatus, parentEntry.getId());
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
