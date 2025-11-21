@@ -2,6 +2,7 @@ package com.apple.springboot.service;
 
 import com.apple.springboot.model.CleansedDataStore;
 import com.apple.springboot.model.ConsolidatedEnrichedSection;
+import com.apple.springboot.model.EmbeddingStatus;
 import com.apple.springboot.model.EnrichedContentElement;
 import com.apple.springboot.repository.ConsolidatedEnrichedSectionRepository;
 import com.apple.springboot.repository.ContentHashRepository;
@@ -19,6 +20,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.UUID;
 
 @Service
 public class ConsolidatedSectionService {
@@ -102,7 +104,7 @@ public class ConsolidatedSectionService {
                     section.setEnrichedAt(item.getEnrichedAt());
                     section.setContext(item.getContext());
                     section.setSavedAt(OffsetDateTime.now());
-                    section.setStatus(item.getStatus());
+                    section.setStatus(EmbeddingStatus.SECTION_PENDING);
 
                     consolidatedRepo.save(section);
                     logger.info("Saved new ConsolidatedEnrichedSection ID {} for usagePath '{}' from EnrichedContentElement ID {}", section.getId(), usagePath, item.getId());
@@ -120,6 +122,27 @@ public class ConsolidatedSectionService {
             return Collections.emptyList();
         }
         return consolidatedRepo.findAllByCleansedDataId(cleansedData.getId());
+    }
+
+    @Transactional
+    public void markSectionsPendingEmbedding(UUID cleansedDataId, Integer version) {
+        consolidatedRepo.updateStatusForCleansedData(cleansedDataId, version, EmbeddingStatus.SECTION_PENDING);
+        consolidatedRepo.updateBlankSectionsStatus(cleansedDataId, version, EmbeddingStatus.SECTION_EMBEDDED);
+    }
+
+    @Transactional
+    public void markSectionEmbedded(UUID sectionId) {
+        consolidatedRepo.updateStatusForSection(sectionId, EmbeddingStatus.SECTION_EMBEDDED);
+    }
+
+    @Transactional
+    public void resetSectionToPending(UUID sectionId) {
+        consolidatedRepo.updateStatusForSection(sectionId, EmbeddingStatus.SECTION_PENDING);
+    }
+
+    @Transactional(readOnly = true)
+    public long countSectionsMissingEmbeddings(UUID cleansedDataId) {
+        return consolidatedRepo.countSectionsMissingEmbeddings(cleansedDataId);
     }
 
     @SuppressWarnings("unchecked")
