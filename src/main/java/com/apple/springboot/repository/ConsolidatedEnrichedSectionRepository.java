@@ -54,12 +54,14 @@ public interface ConsolidatedEnrichedSectionRepository extends JpaRepository<Con
 
      @Transactional
      @Query(value = """
-             select ces.*
+             select *
              from consolidated_enriched_sections ces
-             left join content_chunks cc on cc.consolidated_enriched_section_id = ces.id
-             where cc.id is null
-               and ces.status = 'PENDING_EMBEDDING'
+             where ces.status = 'PENDING_EMBEDDING'
                and coalesce(nullif(btrim(ces.cleansed_text), ''), '') <> ''
+               and not exists (
+                   select 1 from content_chunks cc
+                   where cc.consolidated_enriched_section_id = ces.id
+               )
              order by ces.saved_at nulls last
              limit :limit
              for update skip locked
@@ -69,10 +71,12 @@ public interface ConsolidatedEnrichedSectionRepository extends JpaRepository<Con
      @Query(value = """
              select count(1)
              from consolidated_enriched_sections ces
-             left join content_chunks cc on cc.consolidated_enriched_section_id = ces.id
              where ces.cleansed_data_id = :cleansedDataId
-              and cc.id is null
-              and coalesce(nullif(btrim(ces.cleansed_text), ''), '') <> ''
+               and coalesce(nullif(btrim(ces.cleansed_text), ''), '') <> ''
+               and not exists (
+                   select 1 from content_chunks cc
+                   where cc.consolidated_enriched_section_id = ces.id
+               )
              """, nativeQuery = true)
      long countSectionsMissingEmbeddings(@Param("cleansedDataId") UUID cleansedDataId);
 }
