@@ -140,6 +140,16 @@ public class ConsolidatedSectionService {
         consolidatedRepo.updateStatusForSection(sectionId, EmbeddingStatus.SECTION_PENDING);
     }
 
+    @Transactional
+    public List<ConsolidatedEnrichedSection> claimPendingSections(int limit) {
+        List<ConsolidatedEnrichedSection> sections = consolidatedRepo.lockSectionsMissingEmbeddings(limit);
+        for (ConsolidatedEnrichedSection section : sections) {
+            consolidatedRepo.updateStatusForSection(section.getId(), EmbeddingStatus.SECTION_IN_PROGRESS);
+            section.setStatus(EmbeddingStatus.SECTION_IN_PROGRESS);
+        }
+        return sections;
+    }
+
     @Transactional(readOnly = true)
     public long countSectionsMissingEmbeddings(UUID cleansedDataId) {
         return consolidatedRepo.countSectionsMissingEmbeddings(cleansedDataId);
