@@ -14,6 +14,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.util.concurrent.CompletableFuture;
+
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -187,12 +189,23 @@ public class EnrichmentPipelineService {
     }
 
     private void runInlineFinalizationImmediately(CleansedDataStore cleansedDataEntry) {
-        try {
-            enrichmentProcessor.finalizeInline(cleansedDataEntry);
-            logger.info("Inline enrichment complete for CleansedDataStore ID: {}", cleansedDataEntry.getId());
-        } catch (Exception e) {
-            logger.error("Inline finalization failed for CleansedDataStore ID: {}", cleansedDataEntry.getId(), e);
+        if (cleansedDataEntry == null || cleansedDataEntry.getId() == null) {
+            return;
         }
+        UUID cleansedDataStoreId = cleansedDataEntry.getId();
+        CompletableFuture.runAsync(() -> {
+            try {
+                CleansedDataStore latest = cleansedDataStoreRepository.findById(cleansedDataStoreId).orElse(null);
+                if (latest == null) {
+                    logger.warn("Skipping inline finalization because CleansedDataStore ID {} no longer exists.", cleansedDataStoreId);
+                    return;
+                }
+                enrichmentProcessor.finalizeInline(latest);
+                logger.info("Inline finalization complete for CleansedDataStore ID: {}", cleansedDataStoreId);
+            } catch (Exception e) {
+                logger.error("Inline finalization failed for CleansedDataStore ID: {}", cleansedDataStoreId, e);
+            }
+        });
     }
 
     private void handleSkippedItem(CleansedItemDetail itemDetail, CleansedDataStore cleansedDataEntry, boolean trackCompletion) {
