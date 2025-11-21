@@ -2,6 +2,7 @@ package com.apple.springboot.service;
 
 import com.apple.springboot.model.CleansedDataStore;
 import com.apple.springboot.model.ConsolidatedEnrichedSection;
+import com.apple.springboot.model.EmbeddingStatus;
 import com.apple.springboot.model.EnrichedContentElement;
 import com.apple.springboot.repository.ConsolidatedEnrichedSectionRepository;
 import com.apple.springboot.repository.ContentHashRepository;
@@ -13,12 +14,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.HashMap;
-import java.util.HashSet;
+import java.util.*;
 
 @Service
 public class ConsolidatedSectionService {
@@ -164,5 +160,26 @@ public class ConsolidatedSectionService {
 
     private String usageKey(String sourcePath, String originalFieldName) {
         return sourcePath + "\u0001" + originalFieldName;
+    }
+
+    @Transactional
+    public void markSectionsPendingEmbedding(UUID cleansedDataId, Integer version) {
+        consolidatedRepo.updateStatusForCleansedData(cleansedDataId, version, EmbeddingStatus.SECTION_PENDING);
+        consolidatedRepo.updateBlankSectionsStatus(cleansedDataId, version, EmbeddingStatus.SECTION_EMBEDDED);
+    }
+
+    @Transactional
+    public void markSectionEmbedded(UUID sectionId) {
+        consolidatedRepo.updateStatusForSection(sectionId, EmbeddingStatus.SECTION_EMBEDDED);
+    }
+
+    @Transactional
+    public void resetSectionToPending(UUID sectionId) {
+        consolidatedRepo.updateStatusForSection(sectionId, EmbeddingStatus.SECTION_PENDING);
+    }
+
+    @Transactional(readOnly = true)
+    public long countSectionsMissingEmbeddings(UUID cleansedDataId) {
+        return consolidatedRepo.countSectionsMissingEmbeddings(cleansedDataId);
     }
 }
