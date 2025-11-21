@@ -13,6 +13,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -166,15 +168,33 @@ public class EnrichmentPipelineService {
                     logger.error("Inline enrichment failed for {}::{} - {}", message.getCleansedItemDetail().sourcePath, message.getCleansedItemDetail().originalFieldName, ex.getMessage(), ex);
                 }
             }
-            enrichmentProcessor.finalizeInline(cleansedDataEntry);
-            // Inline mode has already finalized; set final status here
-            cleansedDataStoreRepository.save(cleansedDataEntry);
-            logger.info("Inline enrichment complete for CleansedDataStore ID: {} with final status: {}", cleansedDataEntry.getId(), cleansedDataEntry.getStatus());
-            progressService.complete(cleansedDataStoreId);
+            scheduleInlineFinalization(cleansedDataEntry);
             return;
         }
 
         logger.info("{} items were dispatched for enrichment for CleansedDataStore ID: {}", itemsToQueue.size(), cleansedDataEntry.getId());
+    }
+
+    private void scheduleInlineFinalization(CleansedDataStore cleansedDataEntry) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            runInlineFinalizationImmediately(cleansedDataEntry);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                runInlineFinalizationImmediately(cleansedDataEntry);
+            }
+        });
+    }
+
+    private void runInlineFinalizationImmediately(CleansedDataStore cleansedDataEntry) {
+        try {
+            enrichmentProcessor.finalizeInline(cleansedDataEntry);
+            logger.info("Inline enrichment complete for CleansedDataStore ID: {}", cleansedDataEntry.getId());
+        } catch (Exception e) {
+            logger.error("Inline finalization failed for CleansedDataStore ID: {}", cleansedDataEntry.getId(), e);
+        }
     }
 
     private void handleSkippedItem(CleansedItemDetail itemDetail, CleansedDataStore cleansedDataEntry, boolean trackCompletion) {

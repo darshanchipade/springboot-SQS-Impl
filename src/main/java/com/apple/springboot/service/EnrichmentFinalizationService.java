@@ -55,8 +55,8 @@ public class EnrichmentFinalizationService {
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void finalizeCleansedData(CleansedDataStore cleansedDataEntry) {
-        if (!acquireFinalizationLock(cleansedDataEntry)) {
+    public void finalizeCleansedData(CleansedDataStore cleansedDataEntry, boolean allowInlineLockBypass) {
+        if (!acquireFinalizationLock(cleansedDataEntry, allowInlineLockBypass)) {
             return;
         }
         logger.info("Running finalization steps for CleansedDataStore ID: {}", cleansedDataEntry.getId());
@@ -98,7 +98,7 @@ public class EnrichmentFinalizationService {
         progressService.complete(cleansedDataEntry.getId());
     }
 
-    private boolean acquireFinalizationLock(CleansedDataStore cleansedDataEntry) {
+    private boolean acquireFinalizationLock(CleansedDataStore cleansedDataEntry, boolean allowInlineLockBypass) {
         UUID id = cleansedDataEntry.getId();
         if (id == null) {
             return false;
@@ -109,6 +109,15 @@ public class EnrichmentFinalizationService {
             if (updated == 1) {
                 cleansedDataEntry.setStatus("FINALIZING");
                 logger.info("Acquired finalization lock for CleansedDataStore ID {} (previous status {}).", id, expected);
+                return true;
+            }
+        }
+        if (allowInlineLockBypass) {
+            String currentStatus = cleansedDataEntry.getStatus();
+            if (eligibleStatuses.contains(currentStatus)) {
+                logger.info("Inline finalization detected for {} with local status '{}'. Forcing FINALIZING.", id, currentStatus);
+                cleansedDataEntry.setStatus("FINALIZING");
+                cleansedDataStoreRepository.save(cleansedDataEntry);
                 return true;
             }
         }

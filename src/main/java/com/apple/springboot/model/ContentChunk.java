@@ -42,6 +42,7 @@ public class ContentChunk {
 //    @Version
 //    @Column(name = "row_version", nullable = false)
 //    private long version;
+//@Builder.Default @Column(name = "row_version", nullable = false) private Long rowVersion = 0L;
 
     @ManyToOne
     @JoinColumn(name = "consolidated_enriched_section_id", nullable = false)

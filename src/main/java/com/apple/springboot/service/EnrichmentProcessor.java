@@ -140,12 +140,16 @@ public class EnrichmentProcessor {
         }
     }
 
-    public void finalizeInline(CleansedDataStore cleansedDataEntry) {
-        runFinalizationSteps(cleansedDataEntry);
+    public void finalizeInline(CleansedDataStore cds) {
+        runFinalizationService(cds, true);
     }
 
-    public void runFinalizationSteps(CleansedDataStore cleansedDataEntry) {
-        finalizationService.finalizeCleansedData(cleansedDataEntry);
+    public void runFinalizationSteps(CleansedDataStore cds) {
+        runFinalizationService(cds, false);
+    }
+
+    private void runFinalizationService(CleansedDataStore cds, boolean allowInline) {
+        finalizationService.finalizeCleansedData(cds, allowInline);
     }
 
     private void throttleFor(RateLimiter... limiters) {
