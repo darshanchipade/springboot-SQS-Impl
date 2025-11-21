@@ -1,22 +1,14 @@
 package com.apple.springboot.service;
 
 import com.apple.springboot.model.CleansedDataStore;
-import com.apple.springboot.model.ConsolidatedEnrichedSection;
-import com.apple.springboot.model.ContentChunk;
 import com.apple.springboot.repository.CleansedDataStoreRepository;
-import com.apple.springboot.repository.ContentChunkRepository;
-import com.google.common.util.concurrent.RateLimiter;
 import jakarta.persistence.EntityManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.OffsetDateTime;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.UUID;
 
 @Service
@@ -25,33 +17,15 @@ public class EnrichmentFinalizationService {
     private static final Logger logger = LoggerFactory.getLogger(EnrichmentFinalizationService.class);
 
     private final ConsolidatedSectionService consolidatedSectionService;
-    private final ContentChunkRepository contentChunkRepository;
-    private final TextChunkingService textChunkingService;
-    private final BedrockEnrichmentService bedrockEnrichmentService;
     private final CleansedDataStoreRepository cleansedDataStoreRepository;
     private final EntityManager entityManager;
-    private final EnrichmentProgressService progressService;
-    private final RateLimiter bedrockRateLimiter;
-    private final RateLimiter embedRateLimiter;
 
     public EnrichmentFinalizationService(ConsolidatedSectionService consolidatedSectionService,
-                                         ContentChunkRepository contentChunkRepository,
-                                         TextChunkingService textChunkingService,
-                                         BedrockEnrichmentService bedrockEnrichmentService,
                                          CleansedDataStoreRepository cleansedDataStoreRepository,
-                                         EntityManager entityManager,
-                                         EnrichmentProgressService progressService,
-                                         RateLimiter bedrockRateLimiter,
-                                         @Qualifier("embedRateLimiter") RateLimiter embedRateLimiter) {
+                                         EntityManager entityManager) {
         this.consolidatedSectionService = consolidatedSectionService;
-        this.contentChunkRepository = contentChunkRepository;
-        this.textChunkingService = textChunkingService;
-        this.bedrockEnrichmentService = bedrockEnrichmentService;
         this.cleansedDataStoreRepository = cleansedDataStoreRepository;
         this.entityManager = entityManager;
-        this.progressService = progressService;
-        this.bedrockRateLimiter = bedrockRateLimiter;
-        this.embedRateLimiter = embedRateLimiter;
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -61,41 +35,9 @@ public class EnrichmentFinalizationService {
         }
         logger.info("Running finalization steps for CleansedDataStore ID: {}", cleansedDataEntry.getId());
         consolidatedSectionService.saveFromCleansedEntry(cleansedDataEntry);
-
-        List<ConsolidatedEnrichedSection> savedSections = consolidatedSectionService.getSectionsFor(cleansedDataEntry);
-        contentChunkRepository.deleteByCleansedDataId(cleansedDataEntry.getId());
-
-        final int batchSize = 100;
-        List<ContentChunk> chunkBatch = new ArrayList<>();
-        for (ConsolidatedEnrichedSection section : savedSections) {
-            List<String> chunks = textChunkingService.chunkIfNeeded(section.getCleansedText());
-            for (String chunkText : chunks) {
-                try {
-                    throttleFor(bedrockRateLimiter, embedRateLimiter);
-                    float[] vector = bedrockEnrichmentService.generateEmbedding(chunkText);
-                    ContentChunk contentChunk = new ContentChunk();
-                    contentChunk.setConsolidatedEnrichedSection(section);
-                    contentChunk.setChunkText(chunkText);
-                    contentChunk.setSourceField(section.getSourceUri());
-                    contentChunk.setSectionPath(section.getSectionPath());
-                    contentChunk.setVector(vector);
-                    contentChunk.setCreatedAt(OffsetDateTime.now());
-                    contentChunk.setCreatedBy("EnrichmentPipelineService");
-                    chunkBatch.add(contentChunk);
-                    if (chunkBatch.size() >= batchSize) {
-                        contentChunkRepository.saveAll(chunkBatch);
-                        chunkBatch.clear();
-                    }
-                } catch (Exception e) {
-                    logger.error("Error creating content chunk for item path {}: {}", section.getSectionPath(), e.getMessage(), e);
-                }
-            }
-        }
-        if (!chunkBatch.isEmpty()) {
-            contentChunkRepository.saveAll(chunkBatch);
-        }
-        updateFinalCleansedDataStatus(cleansedDataEntry);
-        progressService.complete(cleansedDataEntry.getId());
+        cleansedDataEntry.setStatus("ENRICHMENT_PENDING_EMBEDDINGS");
+        cleansedDataStoreRepository.save(cleansedDataEntry);
+        logger.info("Queued CleansedDataStore ID: {} for embedding backfill.", cleansedDataEntry.getId());
     }
 
     private boolean acquireFinalizationLock(CleansedDataStore cleansedDataEntry, boolean allowInlineLockBypass) {
@@ -128,7 +70,7 @@ public class EnrichmentFinalizationService {
         return false;
     }
 
-    private void updateFinalCleansedDataStatus(CleansedDataStore cleansedDataEntry) {
+    void updateFinalCleansedDataStatus(CleansedDataStore cleansedDataEntry, String finalStatus) {
         entityManager.flush();
         @SuppressWarnings("unchecked")
         List<Object[]> statusCounts = entityManager.createNativeQuery(
@@ -152,31 +94,8 @@ public class EnrichmentFinalizationService {
         logger.info("Status counts for {} -> success={}, skipped={}, error={}",
                 cleansedDataEntry.getId(), successCount, skippedCount, errorCount);
 
-        String finalStatus;
-        if (errorCount == 0) {
-            if (successCount + skippedCount > 0) {
-                finalStatus = "ENRICHED_COMPLETE";
-            } else {
-                finalStatus = "ENRICHMENT_FAILED";
-            }
-        } else if (successCount + skippedCount > 0) {
-            finalStatus = "PARTIALLY_ENRICHED";
-        } else {
-            finalStatus = "ENRICHMENT_FAILED";
-        }
         cleansedDataEntry.setStatus(finalStatus);
         cleansedDataStoreRepository.save(cleansedDataEntry);
         logger.info("Finished enrichment for CleansedDataStore ID: {}. Final status: {}", cleansedDataEntry.getId(), finalStatus);
-    }
-
-    private void throttleFor(RateLimiter... limiters) {
-        if (limiters == null) {
-            return;
-        }
-        for (RateLimiter limiter : limiters) {
-            if (limiter != null) {
-                limiter.acquire();
-            }
-        }
     }
 }
