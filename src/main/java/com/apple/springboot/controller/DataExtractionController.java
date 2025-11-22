@@ -177,7 +177,7 @@ public class DataExtractionController {
             @Parameter(description = "UUID of the cleansed data entry", required = true)
             @PathVariable UUID id) {
         return cleansedDataStoreRepository.findById(id)
-                .map(CleansedDataStore::getStatus)
+                .map(store -> normalizeStatus(store.getStatus()))
                 .orElse("NOT_FOUND");
     }
 
@@ -229,7 +229,17 @@ public class DataExtractionController {
         }).start();
 
         String successMessage = String.format("Request for %s accepted. CleansedDataID: %s. Enrichment processing initiated in background. Current status: %s",
-                identifierForLog, cleansedDataStoreId.toString(), currentStatus);
+                identifierForLog, cleansedDataStoreId.toString(), normalizeStatus(currentStatus));
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(successMessage);
+    }
+
+    private String normalizeStatus(String status) {
+        if (status == null) {
+            return null;
+        }
+        if ("PARTIALLY_ENRICHED".equalsIgnoreCase(status)) {
+            return "ENRICHMENT COMPLETE";
+        }
+        return status;
     }
 }
