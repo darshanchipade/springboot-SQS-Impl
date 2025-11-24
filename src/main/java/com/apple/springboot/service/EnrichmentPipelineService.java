@@ -101,8 +101,7 @@ public class EnrichmentPipelineService {
         // Filter to only items that need enrichment (text changed)
         List<CleansedItemDetail> changedItems = itemsToEnrich.stream()
                 .filter(itemDetail -> !enrichedContentElementRepository
-                        .existsByCleansedDataIdAndItemSourcePathAndItemOriginalFieldNameAndCleansedText(
-                                cleansedDataStoreId,
+                        .existsByItemSourcePathAndItemOriginalFieldNameAndCleansedText(
                                 itemDetail.sourcePath,
                                 itemDetail.originalFieldName,
                                 itemDetail.cleansedContent))

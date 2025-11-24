@@ -106,22 +106,24 @@ public class DataExtractionController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Error reading file");
         }
     }
-
-    private String deriveSourceIdentifier(MultipartFile file) {
-        String originalFilename = file.getOriginalFilename();
-        String sanitizedFilename = (originalFilename != null) ? originalFilename.trim() : "";
-        if (!sanitizedFilename.isEmpty()) {
-            sanitizedFilename = sanitizedFilename.replace("\\", "/");
-            int lastSlash = sanitizedFilename.lastIndexOf('/');
-            if (lastSlash >= 0 && lastSlash < sanitizedFilename.length() - 1) {
-                sanitizedFilename = sanitizedFilename.substring(lastSlash + 1);
-            }
+private String deriveSourceIdentifier(MultipartFile file) {
+    // Get the original filename, e.g., "internal-425-Test-1-US.json"
+    String originalFilename = file.getOriginalFilename();
+    String sanitizedFilename = (originalFilename != null) ? originalFilename.trim() : "";
+    if (!sanitizedFilename.isEmpty()) {
+        sanitizedFilename = sanitizedFilename.replace("\\", "/");
+        int lastSlash = sanitizedFilename.lastIndexOf('/');
+        if (lastSlash >= 0 && lastSlash < sanitizedFilename.length() - 1) {
+            sanitizedFilename = sanitizedFilename.substring(lastSlash + 1);
         }
-        if (sanitizedFilename.isEmpty()) {
-            sanitizedFilename = "File-upload-" + UUID.randomUUID();
-        }
-        return "file-upload:" + sanitizedFilename;
     }
+    // If for some reason the filename is empty, fall back to a UUID
+    if (sanitizedFilename.isEmpty()) {
+        sanitizedFilename = "File-upload-" + UUID.randomUUID();
+    }
+    // Prepend "file-upload:" to the filename
+    return "file-upload:" + sanitizedFilename;
+}
 
     @Operation(
             summary = "Ingest JSON payload",
@@ -177,7 +179,7 @@ public class DataExtractionController {
             @Parameter(description = "UUID of the cleansed data entry", required = true)
             @PathVariable UUID id) {
         return cleansedDataStoreRepository.findById(id)
-                .map(CleansedDataStore::getStatus)
+                .map(store -> normalizeStatus(store.getStatus()))
                 .orElse("NOT_FOUND");
     }
 
@@ -229,7 +231,17 @@ public class DataExtractionController {
         }).start();
 
         String successMessage = String.format("Request for %s accepted. CleansedDataID: %s. Enrichment processing initiated in background. Current status: %s",
-                identifierForLog, cleansedDataStoreId.toString(), currentStatus);
+                identifierForLog, cleansedDataStoreId.toString(), normalizeStatus(currentStatus));
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(successMessage);
+    }
+
+    private String normalizeStatus(String status) {
+        if (status == null) {
+            return null;
+        }
+        if ("PARTIALLY_ENRICHED".equalsIgnoreCase(status)) {
+            return "ENRICHMENT COMPLETE";
+        }
+        return status;
     }
 }
