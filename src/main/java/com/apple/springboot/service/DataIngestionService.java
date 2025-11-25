@@ -7,6 +7,7 @@ import com.apple.springboot.repository.RawDataStoreRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -334,30 +335,98 @@ public class DataIngestionService {
     }
 
     private RawDataStore findOrCreateRawDataStore(String jsonPayload, String sourceIdentifier) {
-        String newContentHash = calculateContentHash(jsonPayload, null);
-        Optional<RawDataStore> latestVersionOpt = rawDataStoreRepository.findTopBySourceUriOrderByVersionDesc(sourceIdentifier);
+        if (jsonPayload == null || jsonPayload.trim().isEmpty()) {
+            throw new IllegalArgumentException("JSON payload cannot be null or empty for sourceIdentifier " + sourceIdentifier);
+        }
 
+        String newContentHash = calculateContentHash(jsonPayload, null);
+
+        Optional<RawDataStore> existingMatchingContent =
+                rawDataStoreRepository.findBySourceUriAndContentHash(sourceIdentifier, newContentHash);
+        if (existingMatchingContent.isPresent()) {
+            RawDataStore existingRawData = existingMatchingContent.get();
+            logger.info("Ingested content for sourceIdentifier '{}' matches existing raw data ID {}. Skipping new version.",
+                    sourceIdentifier, existingRawData.getId());
+            backfillPayloadColumnsIfMissing(existingRawData, jsonPayload);
+            return rawDataStoreRepository.save(existingRawData);
+        }
+
+        RawDataStore rawDataStore = new RawDataStore();
+        rawDataStore.setSourceUri(sourceIdentifier);
+        rawDataStore.setReceivedAt(OffsetDateTime.now());
+        rawDataStore.setStatus(resolveUploadStatus(sourceIdentifier));
+        rawDataStore.setContentHash(newContentHash);
+        rawDataStore.setLatest(true);
+        populatePayloadColumns(rawDataStore, jsonPayload);
+
+        Optional<RawDataStore> latestVersionOpt = rawDataStoreRepository.findTopBySourceUriOrderByVersionDesc(sourceIdentifier);
         if (latestVersionOpt.isPresent()) {
-            RawDataStore rawDataStore = latestVersionOpt.get();
-            if (Objects.equals(rawDataStore.getContentHash(), newContentHash)) {
-                logger.info("Ingested content for sourceIdentifier '{}' has not changed. Skipping processing.", sourceIdentifier);
-                return null;
+            RawDataStore latestVersion = latestVersionOpt.get();
+            int nextVersion = Optional.ofNullable(latestVersion.getVersion()).orElse(0) + 1;
+            rawDataStore.setVersion(nextVersion);
+            if (Boolean.TRUE.equals(latestVersion.isLatest())) {
+                latestVersion.setLatest(false);
+                rawDataStoreRepository.save(latestVersion);
             }
-            logger.info("Found existing RawDataStore with ID {}. Content has changed, updating record.", rawDataStore.getId());
-            rawDataStore.setReceivedAt(OffsetDateTime.now());
-            rawDataStore.setRawContentText(jsonPayload);
-            rawDataStore.setContentHash(newContentHash);
-            return rawDataStoreRepository.save(rawDataStore);
         } else {
-            RawDataStore rawDataStore = new RawDataStore();
-            rawDataStore.setSourceUri(sourceIdentifier);
             rawDataStore.setVersion(1);
-            rawDataStore.setReceivedAt(OffsetDateTime.now());
+        }
+
+        logger.info("No matching content found for sourceIdentifier {}. Persisting version {}.", sourceIdentifier, rawDataStore.getVersion());
+        return rawDataStoreRepository.save(rawDataStore);
+    }
+
+    private void populatePayloadColumns(RawDataStore rawDataStore, String jsonPayload) {
+        rawDataStore.setRawContentText(jsonPayload);
+        rawDataStore.setRawContentBinary(jsonPayload.getBytes(StandardCharsets.UTF_8));
+        rawDataStore.setSourceContentType("application/json");
+        rawDataStore.setSourceMetadata(extractSourceMetadata(jsonPayload));
+    }
+
+    private void backfillPayloadColumnsIfMissing(RawDataStore rawDataStore, String jsonPayload) {
+        if (rawDataStore.getRawContentText() == null) {
             rawDataStore.setRawContentText(jsonPayload);
-            rawDataStore.setContentHash(newContentHash);
-            rawDataStore.setStatus("API_PAYLOAD_RECEIVED");
-            logger.info("No existing RawDataStore found for sourceIdentifier {}. Creating a new one.", sourceIdentifier);
-            return rawDataStoreRepository.save(rawDataStore);
+        }
+        if (rawDataStore.getRawContentBinary() == null) {
+            rawDataStore.setRawContentBinary(jsonPayload.getBytes(StandardCharsets.UTF_8));
+        }
+        if (rawDataStore.getSourceContentType() == null) {
+            rawDataStore.setSourceContentType("application/json");
+        }
+        if (rawDataStore.getSourceMetadata() == null) {
+            rawDataStore.setSourceMetadata(extractSourceMetadata(jsonPayload));
+        }
+    }
+
+    private String resolveUploadStatus(String sourceIdentifier) {
+        if (sourceIdentifier == null) {
+            return "API_PAYLOAD_RECEIVED";
+        }
+        if (sourceIdentifier.startsWith("file-upload:")) {
+            return "FILE_UPLOAD_RECEIVED";
+        }
+        if (sourceIdentifier.startsWith("classpath:")) {
+            return "CLASSPATH_CONTENT_RECEIVED";
+        }
+        return "API_PAYLOAD_RECEIVED";
+    }
+
+    private String extractSourceMetadata(String jsonPayload) {
+        if (jsonPayload == null) {
+            return null;
+        }
+        try {
+            JsonNode rootNode = objectMapper.readTree(jsonPayload);
+            if (rootNode instanceof ObjectNode objectNode) {
+                objectNode.remove("_model");
+                objectNode.remove("_path");
+                objectNode.remove("copy");
+                return objectMapper.writeValueAsString(objectNode);
+            }
+            return objectMapper.writeValueAsString(rootNode);
+        } catch (JsonProcessingException e) {
+            logger.error("Error processing JSON payload to extract metadata", e);
+            return null;
         }
     }
 
