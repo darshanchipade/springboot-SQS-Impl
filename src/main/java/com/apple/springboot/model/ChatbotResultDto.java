@@ -1,17 +1,22 @@
 package com.apple.springboot.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
 @Schema(description = "Chatbot search result containing matched content and metadata")
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public class ChatbotResultDto {
     @JsonProperty("section")
     @Schema(description = "Section identifier", example = "video-section-header")
@@ -21,12 +26,10 @@ public class ChatbotResultDto {
     @Schema(description = "Content fragment ID", example = "cf1")
     private String cfId; // e.g., "cf1", assigned sequentially
 
-    @JsonProperty("section_path")
-    @Schema(description = "Path to the section", example = "/en_US/ipad")
+    @JsonIgnore
     private String sectionPath;
 
-    @JsonProperty("section_uri")
-    @Schema(description = "URI of the section", example = "https://example.com/section")
+    @JsonIgnore
     private String sectionUri;
 
     @JsonProperty("cleansed_text")
@@ -39,13 +42,13 @@ public class ChatbotResultDto {
     @JsonProperty("tenant")
     private String tenant; // derived from path (e.g., applecom-cms)
 
-    @JsonProperty("locale")
+    @JsonIgnore
     private String locale; // e.g., en_US
 
-    @JsonProperty("country")
+    @JsonIgnore
     private String country;
 
-    @JsonProperty("language")
+    @JsonIgnore
     private String language;
 
     public <T> ChatbotResultDto(String originalFieldName, String s, String sectionPath, String sectionUri, String chunkText, String source, String originalFieldName1, int rank, double distance, String string, String lastModified, List<T> ts) {
@@ -55,10 +58,10 @@ public class ChatbotResultDto {
     @JsonProperty("text")
     public String getText() { return cleansedText; }
 
-    @JsonProperty("source")
+    @JsonIgnore
     private String source; // "consolidated_enriched_sections" or "content_chunks"
 
-    @JsonProperty("content_role")
+    @JsonIgnore
     private String contentRole; // maps from original_field_name
 
     // Optionals removed per requirements simplification
@@ -70,6 +73,26 @@ public class ChatbotResultDto {
     private java.util.List<String> matchTerms;
 
     @JsonProperty("context")
-    private java.util.Map<String, Object> context;
+    private Map<String, Object> context;
+
+    public void setContext(Map<String, Object> context) {
+        this.context = slimContext(context);
+    }
+
+    private Map<String, Object> slimContext(Map<String, Object> context) {
+        if (context == null) {
+            return null;
+        }
+        Map<String, Object> slim = new LinkedHashMap<>();
+        Object facets = context.get("facets");
+        if (facets != null) {
+            slim.put("facets", facets);
+        }
+        Object envelope = context.get("envelope");
+        if (envelope != null) {
+            slim.put("envelope", envelope);
+        }
+        return slim.isEmpty() ? null : slim;
+    }
 
 }
