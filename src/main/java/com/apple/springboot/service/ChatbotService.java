@@ -368,13 +368,33 @@ public class ChatbotService {
             return;
         }
         for (ChatbotResultDto dto : source) {
-            if (dto == null) {
+            String key = buildResultKey(dto);
+            if (key == null) {
                 continue;
             }
-            String key = (dto.getSectionPath() != null ? dto.getSectionPath() : "")
-                    + "|" + (dto.getContentRole() != null ? dto.getContentRole() : "");
             target.putIfAbsent(key, dto);
         }
+    }
+
+    private String buildResultKey(ChatbotResultDto dto) {
+        if (dto == null) {
+            return null;
+        }
+        return safeKey(dto.getSectionPath())
+                + "|" + safeKey(dto.getContentRole())
+                + "|" + textSignature(dto.getCleansedText());
+    }
+
+    private String safeKey(String value) {
+        return StringUtils.hasText(value) ? value.trim() : "";
+    }
+
+    private String textSignature(String text) {
+        if (!StringUtils.hasText(text)) {
+            return "";
+        }
+        String normalized = text.replaceAll("\\s+", " ").trim();
+        return Integer.toHexString(normalized.hashCode());
     }
 
     private void assignCfIds(List<ChatbotResultDto> results,
