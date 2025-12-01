@@ -16,6 +16,9 @@ import java.util.*;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+/**
+ * Coordinates the AI prompt-based discovery flow, combining model guidance with vector and metadata searches.
+ */
 @Service
 public class AiPromptSearchService {
 
@@ -27,6 +30,14 @@ public class AiPromptSearchService {
     private final ConsolidatedEnrichedSectionRepository consolidatedRepo;
     private final ObjectMapper objectMapper;
 
+    /**
+     * Creates the service with all collaborating components.
+     *
+     * @param bedrockEnrichmentService client for invoking Bedrock prompts/embeddings
+     * @param vectorSearchService      repository interface for vector similarity
+     * @param consolidatedRepo         repository for consolidated metadata rows
+     * @param objectMapper             JSON mapper used for AI payload parsing
+     */
     public AiPromptSearchService(BedrockEnrichmentService bedrockEnrichmentService,
                                  VectorSearchService vectorSearchService,
                                  ConsolidatedEnrichedSectionRepository consolidatedRepo,

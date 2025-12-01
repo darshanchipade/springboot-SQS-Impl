@@ -9,6 +9,9 @@ import org.springframework.stereotype.Service;
 import jakarta.transaction.Transactional;
 import java.util.Map;
 
+/**
+ * Provides utilities for synchronizing context metadata between enriched elements and consolidated sections.
+ */
 @Service
 public class ContextUpdateService {
 
@@ -17,6 +20,9 @@ public class ContextUpdateService {
     private final EnrichedContentElementRepository enrichedRepo;
     private final ConsolidatedEnrichedSectionRepository consolidatedRepo;
 
+    /**
+     * Creates the service with the repositories that can be updated in tandem.
+     */
     public ContextUpdateService(EnrichedContentElementRepository enrichedRepo,
                                 ConsolidatedEnrichedSectionRepository consolidatedRepo) {
         this.enrichedRepo = enrichedRepo;

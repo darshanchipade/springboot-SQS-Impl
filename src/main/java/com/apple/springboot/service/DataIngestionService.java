@@ -29,6 +29,10 @@ import java.util.regex.Pattern;
 import java.nio.charset.StandardCharsets;
 import java.util.stream.Collectors;
 
+/**
+ * Coordinates ingestion from raw JSON sources into cleansed data stores, handling hashing, deduplication,
+ * context enrichment, and error reporting.
+ */
 @Service
 public class DataIngestionService {
 
@@ -96,7 +100,7 @@ public class DataIngestionService {
 
 
     /**
-     * Constructs the service with required repositories and config values.
+     * Builds the ingestion pipeline with all persistence layers and supporting services.
      */
     public DataIngestionService(RawDataStoreRepository rawDataStoreRepository,
                                 CleansedDataStoreRepository cleansedDataStoreRepository,
@@ -121,6 +125,9 @@ public class DataIngestionService {
     }
 
 
+    /**
+     * Value object describing the bucket/key derived from an S3 URI.
+     */
     private static class S3ObjectDetails {
         final String bucketName;
         final String fileKey;
@@ -129,6 +136,9 @@ public class DataIngestionService {
             this.fileKey = fileKey;
         }
     }
+    /**
+     * Parses an s3:// URI into bucket/key components, supporting implicit default bucket syntax.
+     */
     private S3ObjectDetails parseS3Uri(String s3Uri) throws IllegalArgumentException {
         if (s3Uri == null || !s3Uri.startsWith("s3://")) {
             throw new IllegalArgumentException("Invalid S3 URI format: Must start with s3://. Received: " + s3Uri);

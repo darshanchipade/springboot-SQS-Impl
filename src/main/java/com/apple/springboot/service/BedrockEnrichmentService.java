@@ -27,6 +27,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 
+/**
+ * Handles all interactions with Amazon Bedrock for embeddings, enrichment prompts, and chat completions.
+ */
 @Service
 public class BedrockEnrichmentService {
 
@@ -40,6 +43,15 @@ public class BedrockEnrichmentService {
 
     @Value("${app.enrichment.computeItemVector:false}")
     private boolean computeItemVector;
+    /**
+     * Builds the service and configures the Bedrock runtime client.
+     *
+     * @param objectMapper     JSON mapper shared across the pipeline
+     * @param region           AWS region hosting the Bedrock APIs
+     * @param modelId          primary Bedrock model id for enrichment
+     * @param embeddingModelId model id used for embedding generation
+     * @param bedrockMaxTokens maximum tokens allowed in chat responses
+     */
     @Autowired
     public BedrockEnrichmentService(ObjectMapper objectMapper,
                                     @Value("${aws.region}") String region,
@@ -64,10 +76,20 @@ public class BedrockEnrichmentService {
         logger.info("BedrockEnrichmentService initialized with region: {} and model ID: {}", this.bedrockRegion, this.bedrockModelId);
     }
 
+    /**
+     * @return the configured model identifier used for enrichment prompts.
+     */
     public String getConfiguredModelId() {
         return this.bedrockModelId;
     }
 
+    /**
+     * Generates a vector embedding for the provided text using the configured embedding model.
+     *
+     * @param text input text to embed
+     * @return float vector representation
+     * @throws IOException when the Bedrock call fails or the response cannot be parsed
+     */
     public float[] generateEmbedding(String text) throws IOException {
         ObjectNode payload = objectMapper.createObjectNode();
         payload.put("inputText", text);
@@ -100,6 +122,9 @@ public class BedrockEnrichmentService {
         }
     }
 
+    /**
+     * Builds the deterministic prompt sent to Bedrock for enrichment generation.
+     */
     private String createEnrichmentPrompt(JsonNode itemContent, EnrichmentContext context) throws JsonProcessingException {
         String cleansedContent = itemContent.path("cleansedContent").asText("");
         String contextJson = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(context);
@@ -133,6 +158,9 @@ public class BedrockEnrichmentService {
                         "}";
         return String.format(promptTemplate, cleansedContent, contextJson);
     }
+    /**
+     * Invokes Bedrock to enrich a single cleansed item and returns the parsed AI response.
+     */
     public Map<String, Object> enrichItem(JsonNode itemContent, EnrichmentContext context) {
         String effectiveModelId = this.bedrockModelId;
         String sourcePath = (context != null && context.getEnvelope() != null) ? context.getEnvelope().getSourcePath() : "Unknown";
@@ -218,7 +246,7 @@ public class BedrockEnrichmentService {
 
 
     /**
-     * Generic chat invoke for free-form prompts. Returns the first text block from the response.
+     * Calls Bedrock chat completion and returns the first text block, optionally overriding max tokens.
      */
     public String invokeChatForText(String content, Integer overrideMaxTokens) {
         String effectiveModelId = this.bedrockModelId;
@@ -278,6 +306,13 @@ public class BedrockEnrichmentService {
     }
 
 
+    /**
+     * Repeatedly invokes Bedrock with exponential backoff, surfacing throttling as {@link ThrottledException}.
+     *
+     * @param request     request to execute
+     * @param isEmbedding whether the call targets the embedding model (tighter backoff)
+     * @return response from Bedrock
+     */
     private InvokeModelResponse invokeWithRetry(InvokeModelRequest request, boolean isEmbedding) {
         final int maxAttempts = 6;
         final long baseBackoffMs = isEmbedding ? 400L : 800L;

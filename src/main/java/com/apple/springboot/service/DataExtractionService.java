@@ -53,6 +53,9 @@ public class DataExtractionService {
     private static final Pattern METADATA_PATTERN = Pattern.compile("\\{% metadata=\"\\d+\" %\\}");
    // private static final Pattern APR_PATTERN = Pattern.compile("\\{%apr value=\"[^\"]+\"%\\}");
 
+    /**
+     * Creates the extractor with the resource loader and JSON mapper configuration.
+     */
     @Autowired
     public DataExtractionService(ResourceLoader resourceLoader, ObjectMapper objectMapper) {
         this.resourceLoader = resourceLoader;

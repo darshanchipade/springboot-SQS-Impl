@@ -16,6 +16,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.OffsetDateTime;
 import java.util.*;
 
+/**
+ * Persists consolidated enriched sections and manages their embedding lifecycle states.
+ */
 @Service
 public class ConsolidatedSectionService {
 
@@ -27,6 +30,9 @@ public class ConsolidatedSectionService {
     private final EntityManager entityManager;
     private static final String USAGE_REF_DELIM = " ::ref:: ";
 
+    /**
+     * Creates the service and wires repositories required to consolidate sections.
+     */
     public ConsolidatedSectionService(EnrichedContentElementRepository enrichedRepo,
                                       ConsolidatedEnrichedSectionRepository consolidatedRepo,
                                       ContentHashRepository contentHashRepository,
@@ -37,6 +43,9 @@ public class ConsolidatedSectionService {
         this.entityManager = entityManager;
     }
 
+    /**
+     * Converts all enriched items on a cleansed entry into consolidated section rows.
+     */
     @Transactional
     public void saveFromCleansedEntry(CleansedDataStore cleansedData) {
         // Build an index of all usagePaths per (sourcePath, originalFieldName) from the cleansed items
@@ -110,6 +119,9 @@ public class ConsolidatedSectionService {
         }
     }
 
+    /**
+     * Retrieves every consolidated section tied to the given cleansed entry.
+     */
     @Transactional(readOnly = true)
     public List<ConsolidatedEnrichedSection> getSectionsFor(CleansedDataStore cleansedData) {
         if (cleansedData == null || cleansedData.getId() == null) {
@@ -118,6 +130,9 @@ public class ConsolidatedSectionService {
         return consolidatedRepo.findAllByCleansedDataId(cleansedData.getId());
     }
 
+    /**
+     * Extracts the usage path a single enriched element should map to.
+     */
     @SuppressWarnings("unchecked")
     private String extractUsagePath(EnrichedContentElement item) {
         Map<String, Object> ctx = item.getContext();
@@ -133,6 +148,9 @@ public class ConsolidatedSectionService {
         return item.getItemSourcePath();
     }
 
+    /**
+     * Splits a usagePath into source section path and content fragment path halves.
+     */
     private String[] splitUsagePath(String usagePath) {
         if (usagePath == null || usagePath.isBlank()) return new String[]{null, null};
         int idx = usagePath.indexOf(USAGE_REF_DELIM);
@@ -142,6 +160,9 @@ public class ConsolidatedSectionService {
         return new String[]{left.isEmpty() ? null : left, right.isEmpty() ? null : right};
     }
 
+    /**
+     * Builds a lookup of all usage paths grouped by (sourcePath, fieldName).
+     */
     private Map<String, Set<String>> buildUsageIndex(CleansedDataStore cleansedData) {
         Map<String, Set<String>> index = new HashMap<>();
         if (cleansedData == null || cleansedData.getCleansedItems() == null) return index;
@@ -158,26 +179,41 @@ public class ConsolidatedSectionService {
         return index;
     }
 
+    /**
+     * Produces a deterministic key for the usage-path index.
+     */
     private String usageKey(String sourcePath, String originalFieldName) {
         return sourcePath + "\u0001" + originalFieldName;
     }
 
+    /**
+     * Marks all qualifying sections for a cleansed entry as awaiting embeddings.
+     */
     @Transactional
     public void markSectionsPendingEmbedding(UUID cleansedDataId, Integer version) {
         consolidatedRepo.updateStatusForCleansedData(cleansedDataId, version, EmbeddingStatus.SECTION_PENDING);
         consolidatedRepo.updateBlankSectionsStatus(cleansedDataId, version, EmbeddingStatus.SECTION_EMBEDDED);
     }
 
+    /**
+     * Sets a specific section to the embedded status.
+     */
     @Transactional
     public void markSectionEmbedded(UUID sectionId) {
         consolidatedRepo.updateStatusForSection(sectionId, EmbeddingStatus.SECTION_EMBEDDED);
     }
 
+    /**
+     * Reverts a section back to pending so embeddings can be regenerated.
+     */
     @Transactional
     public void resetSectionToPending(UUID sectionId) {
         consolidatedRepo.updateStatusForSection(sectionId, EmbeddingStatus.SECTION_PENDING);
     }
 
+    /**
+     * Counts how many sections for a cleansed entry still require embeddings.
+     */
     @Transactional(readOnly = true)
     public long countSectionsMissingEmbeddings(UUID cleansedDataId) {
         return consolidatedRepo.countSectionsMissingEmbeddings(cleansedDataId);

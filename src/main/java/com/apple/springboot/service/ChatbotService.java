@@ -387,6 +387,9 @@ public class ChatbotService {
                 .collect(Collectors.toCollection(ArrayList::new));
     }
 
+    /**
+     * Inserts source results into the deduped map while preserving first wins ordering.
+     */
     private void addResults(LinkedHashMap<String, ChatbotResultDto> target, List<ChatbotResultDto> source) {
         if (target == null || source == null) {
             return;

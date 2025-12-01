@@ -21,6 +21,9 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
+/**
+ * Periodically backfills missing embeddings by chunking consolidated sections and persisting vectors.
+ */
 @Service
 public class EmbeddingBackfillWorker {
 
@@ -38,6 +41,9 @@ public class EmbeddingBackfillWorker {
     private final boolean workerEnabled;
     private final AtomicBoolean running = new AtomicBoolean(false);
 
+    /**
+     * Wires the worker with all collaborators and runtime configuration.
+     */
     public EmbeddingBackfillWorker(ConsolidatedEnrichedSectionRepository sectionRepository,
                                    ContentChunkRepository contentChunkRepository,
                                    TextChunkingService textChunkingService,
@@ -60,6 +66,9 @@ public class EmbeddingBackfillWorker {
         this.workerEnabled = workerEnabled;
     }
 
+    /**
+     * Scheduled entry point that locks and processes sections needing embeddings.
+     */
     @Scheduled(fixedDelayString = "${app.embedding.worker.poll-delay-ms:5000}")
     @Transactional
     public void pollPendingSections() {
@@ -77,6 +86,9 @@ public class EmbeddingBackfillWorker {
         }
     }
 
+    /**
+     * Dequeues a batch of sections, embeds them, and updates finalization status.
+     */
     private void processBatch() {
         List<ConsolidatedEnrichedSection> sections = sectionRepository.lockSectionsMissingEmbeddings(batchSize);
         if (sections.isEmpty()) {
@@ -104,6 +116,9 @@ public class EmbeddingBackfillWorker {
         }
     }
 
+    /**
+     * Embeds a single section by chunking text, generating vectors, and storing chunks.
+     */
     private boolean embedSection(ConsolidatedEnrichedSection section) {
         List<String> chunks = textChunkingService.chunkIfNeeded(section.getCleansedText());
         if (chunks.isEmpty()) {
@@ -139,6 +154,9 @@ public class EmbeddingBackfillWorker {
         }
     }
 
+    /**
+     * Applies the configured rate limiters sequentially.
+     */
     private void throttleFor(RateLimiter... limiters) {
         if (limiters == null) {
             return;
