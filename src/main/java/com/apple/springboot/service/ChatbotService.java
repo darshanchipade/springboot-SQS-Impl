@@ -54,7 +54,9 @@ public class ChatbotService {
             "with",
             "of",
             "in",
-            "on"
+            "on",
+            "give",
+            "me"
     );
     private static final Set<String> PAGE_STOP_WORDS = Set.of(
             "for",
@@ -62,7 +64,6 @@ public class ChatbotService {
             "sections",
             "copy",
             "content",
-            "headline",
             "with",
             "and",
             "the"
@@ -463,6 +464,10 @@ public class ChatbotService {
         if (criteria == null) {
             return true;
         }
+
+        String effectiveCountry = deriveCountry(dto);
+        String effectiveLocale = deriveLocale(dto);
+
         if (StringUtils.hasText(criteria.role())
                 && !matchesRole(dto.getContentRole(), criteria.role())) {
             return false;
@@ -473,18 +478,90 @@ public class ChatbotService {
             return false;
         }
         if (StringUtils.hasText(criteria.country())
-                && StringUtils.hasText(dto.getCountry())
-                && !dto.getCountry().equalsIgnoreCase(criteria.country())) {
+                && StringUtils.hasText(effectiveCountry)
+                && !effectiveCountry.equalsIgnoreCase(criteria.country())) {
             return false;
         }
         if (StringUtils.hasText(criteria.locale())
-                && StringUtils.hasText(dto.getLocale())
-                && !dto.getLocale().equalsIgnoreCase(criteria.locale())) {
+                && StringUtils.hasText(effectiveLocale)
+                && !effectiveLocale.equalsIgnoreCase(criteria.locale())) {
             return false;
         }
         return true;
     }
 
+    private String deriveLocale(ChatbotResultDto dto) {
+        if (dto == null) {
+            return null;
+        }
+        if (StringUtils.hasText(dto.getLocale())) {
+            return dto.getLocale();
+        }
+        Map<String, Object> context = dto.getContext();
+        if (context != null) {
+            Map<String, Object> facets = asMap(context.get("facets"));
+            if (facets != null) {
+                String fromFacets = normalizeLocale(firstString(facets.get("locale")));
+                if (StringUtils.hasText(fromFacets)) {
+                    return fromFacets;
+                }
+            }
+            Map<String, Object> envelope = asMap(context.get("envelope"));
+            if (envelope != null) {
+                String fromEnvelope = normalizeLocale(firstString(envelope.get("locale")));
+                if (StringUtils.hasText(fromEnvelope)) {
+                    return fromEnvelope;
+                }
+            }
+        }
+        String fromPath = normalizeLocale(extractLocaleFromPath(dto.getSectionPath()));
+        if (!StringUtils.hasText(fromPath)) {
+            fromPath = normalizeLocale(extractLocaleFromPath(dto.getSectionUri()));
+        }
+        return fromPath;
+    }
+    private String deriveCountry(ChatbotResultDto dto) {
+        if (dto == null) {
+            return null;
+        }
+        if (StringUtils.hasText(dto.getCountry())) {
+            return dto.getCountry();
+        }
+        String locale = deriveLocale(dto);
+        if (StringUtils.hasText(locale) && locale.contains("_")) {
+            return locale.substring(3).toUpperCase(Locale.ROOT);
+        }
+        Map<String, Object> context = dto.getContext();
+        if (context != null) {
+            Map<String, Object> facets = asMap(context.get("facets"));
+            if (facets != null) {
+                String fromFacets = mapCountryAlias(firstString(facets.get("country")));
+                if (StringUtils.hasText(fromFacets)) {
+                    return fromFacets;
+                }
+            }
+            Map<String, Object> envelope = asMap(context.get("envelope"));
+            if (envelope != null) {
+                String fromEnvelope = mapCountryAlias(firstString(envelope.get("country")));
+                if (StringUtils.hasText(fromEnvelope)) {
+                    return fromEnvelope;
+                }
+            }
+        }
+        String fromPath = mapCountryAlias(extractCountryFromPath(dto.getSectionPath()));
+        if (!StringUtils.hasText(fromPath)) {
+            fromPath = mapCountryAlias(extractCountryFromPath(dto.getSectionUri()));
+        }
+        return fromPath;
+    }
+
+    private String extractCountryFromPath(String path) {
+        String locale = extractLocaleFromPath(path);
+        if (!StringUtils.hasText(locale) || !locale.contains("_")) {
+            return null;
+        }
+        return locale.substring(locale.indexOf('_') + 1);
+    }
     private ChatbotResultDto mapSection(ConsolidatedEnrichedSection section, String source) {
         if (section == null) {
             return null;
@@ -504,6 +581,8 @@ public class ChatbotService {
         dto.setLocale(locale);
         dto.setLanguage(resolveLanguage(section, locale));
         dto.setCountry(resolveCountry(section, locale));
+        dto.setLocale(deriveLocale(dto));
+        dto.setCountry(deriveCountry(dto));
 
         return dto;
     }
