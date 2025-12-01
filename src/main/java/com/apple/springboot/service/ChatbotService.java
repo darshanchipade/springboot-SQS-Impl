@@ -89,6 +89,9 @@ public class ChatbotService {
         this.countryIndex = buildCountryIndex();
     }
 
+    /**
+     * Entry point for chatbot queries; orchestrates interpretation, filtering, and retrieval.
+     */
     public List<ChatbotResultDto> query(ChatbotRequest request) {
         String userMessage = request != null ? request.getMessage() : null;
         Map<String, Object> rawRequestContext = request != null ? request.getContext() : null;
@@ -217,6 +220,9 @@ public class ChatbotService {
         return List.of();
     }
 
+    /**
+     * Resolves the desired result limit while enforcing sane boundaries.
+     */
     private int determineLimit(ChatbotRequest request) {
         if (request == null || request.getLimit() == null || request.getLimit() <= 0) {
             return 15;
@@ -224,6 +230,9 @@ public class ChatbotService {
         return Math.min(request.getLimit(), 200);
     }
 
+    /**
+     * Executes the vector search path and adapts database chunks into DTOs.
+     */
     private List<ChatbotResultDto> fetchVectorResults(SearchCriteria criteria,
                                                       Map<String, Object> context,
                                                       int limit,
@@ -261,6 +270,9 @@ public class ChatbotService {
         }
     }
 
+    /**
+     * Aggregates vector and metadata searches under a unified context.
+     */
     private List<ChatbotResultDto> runSearch(SearchCriteria criteria,
                                              Map<String, Object> requestContext,
                                              Map<String, Object> interpretationContext,
@@ -285,6 +297,9 @@ public class ChatbotService {
         return mergeResults(vectorResults, consolidatedResults, limit);
     }
 
+    /**
+     * Discovers related section keys when only page information is known.
+     */
     private List<ChatbotResultDto> trySectionDiscovery(SearchCriteria criteria,
                                                        Map<String, Object> requestContext,
                                                        Map<String, Object> interpretationContext,
@@ -315,6 +330,9 @@ public class ChatbotService {
         return aggregated.size() > limit ? aggregated.subList(0, limit) : aggregated;
     }
 
+    /**
+     * Performs metadata-oriented lookups directly on consolidated sections.
+     */
     private List<ChatbotResultDto> fetchConsolidatedResults(SearchCriteria criteria, int limit) {
         try {
             LinkedHashMap<UUID, ConsolidatedEnrichedSection> collected = new LinkedHashMap<>();
@@ -339,6 +357,9 @@ public class ChatbotService {
         }
     }
 
+    /**
+     * Adds rows to a LinkedHashMap without duplicating section IDs.
+     */
     private void collectRows(Map<UUID, ConsolidatedEnrichedSection> target,
                              List<ConsolidatedEnrichedSection> rows) {
         if (target == null || rows == null) {
@@ -351,6 +372,9 @@ public class ChatbotService {
         }
     }
 
+    /**
+     * Merges vector and metadata results while preserving stable ordering.
+     */
     private List<ChatbotResultDto> mergeResults(List<ChatbotResultDto> vector,
                                                 List<ChatbotResultDto> consolidated,
                                                 int limit) {
@@ -376,6 +400,9 @@ public class ChatbotService {
         }
     }
 
+    /**
+     * Builds a stable deduplication key for a result entry.
+     */
     private String buildResultKey(ChatbotResultDto dto) {
         if (dto == null) {
             return null;
@@ -385,10 +412,16 @@ public class ChatbotService {
                 + "|" + textSignature(dto.getCleansedText());
     }
 
+    /**
+     * Normalizes nullable key components.
+     */
     private String safeKey(String value) {
         return StringUtils.hasText(value) ? value.trim() : "";
     }
 
+    /**
+     * Produces a lightweight hash signature for cleansed text comparisons.
+     */
     private String textSignature(String text) {
         if (!StringUtils.hasText(text)) {
             return "";
@@ -397,6 +430,9 @@ public class ChatbotService {
         return Integer.toHexString(normalized.hashCode());
     }
 
+    /**
+     * Populates cfIds and inferred metadata fields for outbound DTOs.
+     */
     private void assignCfIds(List<ChatbotResultDto> results,
                              SearchCriteria criteria,
                              List<String> tags,
@@ -437,6 +473,9 @@ public class ChatbotService {
         }
     }
 
+    /**
+     * Builds the descriptive term list exposed to clients for highlighting.
+     */
     private List<String> buildMatchTerms(ChatbotResultDto dto,
                                          SearchCriteria criteria,
                                          List<String> tags,
@@ -459,6 +498,9 @@ public class ChatbotService {
         return new ArrayList<>(terms);
     }
 
+    /**
+     * Adds a trimmed value to a term set when present.
+     */
     private void addTerm(Set<String> terms, String value) {
         if (terms == null || !StringUtils.hasText(value)) {
             return;
@@ -466,6 +508,9 @@ public class ChatbotService {
         terms.add(value);
     }
 
+    /**
+     * Normalizes and deduplicates user-provided tags or keywords.
+     */
     private void addNormalizedStrings(Set<String> target, List<String> values) {
         if (target == null || values == null) {
             return;
@@ -477,6 +522,9 @@ public class ChatbotService {
         }
     }
 
+    /**
+     * Post-filters candidate DTOs using role, locale, and country constraints.
+     */
     private boolean matchesCriteria(ChatbotResultDto dto, SearchCriteria criteria) {
         if (dto == null) {
             return false;
@@ -510,6 +558,9 @@ public class ChatbotService {
         return true;
     }
 
+    /**
+     * Attempts to read or infer the locale associated with a DTO.
+     */
     private String deriveLocale(ChatbotResultDto dto) {
         if (dto == null) {
             return null;
@@ -540,6 +591,9 @@ public class ChatbotService {
         }
         return fromPath;
     }
+    /**
+     * Infers the country from locale, context, or path metadata.
+     */
     private String deriveCountry(ChatbotResultDto dto) {
         if (dto == null) {
             return null;
@@ -575,6 +629,9 @@ public class ChatbotService {
         return fromPath;
     }
 
+    /**
+     * Parses the country component from a path-based locale segment.
+     */
     private String extractCountryFromPath(String path) {
         String locale = extractLocaleFromPath(path);
         if (!StringUtils.hasText(locale) || !locale.contains("_")) {
@@ -582,6 +639,9 @@ public class ChatbotService {
         }
         return locale.substring(locale.indexOf('_') + 1);
     }
+    /**
+     * Converts a consolidated section entity into a DTO representation.
+     */
     private ChatbotResultDto mapSection(ConsolidatedEnrichedSection section, String source) {
         if (section == null) {
             return null;
@@ -607,10 +667,16 @@ public class ChatbotService {
         return dto;
     }
 
+    /**
+     * Formats timestamps for serialization while handling nulls.
+     */
     private String formatTimestamp(OffsetDateTime timestamp) {
         return timestamp != null ? timestamp.toString() : null;
     }
 
+    /**
+     * Determines the tenant name for a consolidated section.
+     */
     private String resolveTenant(ConsolidatedEnrichedSection section) {
         String fromEnvelope = asStringFromContext(section, "envelope", "tenant");
         if (StringUtils.hasText(fromEnvelope)) {
@@ -627,6 +693,9 @@ public class ChatbotService {
         return StringUtils.hasText(fromUri) ? fromUri : "applecom-cms";
     }
 
+    /**
+     * Extracts the logical page identifier for the section.
+     */
     private String resolvePageId(ConsolidatedEnrichedSection section) {
         if (section == null) {
             return null;
@@ -653,6 +722,9 @@ public class ChatbotService {
         return fromPath;
     }
 
+    /**
+     * Resolves the locale directly from persisted context or path data.
+     */
     private String resolveLocale(ConsolidatedEnrichedSection section) {
         if (section == null) {
             return null;
@@ -679,6 +751,9 @@ public class ChatbotService {
         return fromUri;
     }
 
+    /**
+     * Resolves the preferred language for a section, falling back to locale prefix.
+     */
     private String resolveLanguage(ConsolidatedEnrichedSection section, String locale) {
         String direct = normalizeLanguage(firstString(section != null && section.getContext() != null
                 ? section.getContext().get("language") : null));
@@ -695,6 +770,9 @@ public class ChatbotService {
         return null;
     }
 
+    /**
+     * Establishes a human-friendly role/content type label for the section.
+     */
     private String resolveRole(ConsolidatedEnrichedSection section) {
         if (section == null) {
             return null;
@@ -718,6 +796,9 @@ public class ChatbotService {
         return role;
     }
 
+    /**
+     * Checks whether a candidate role string satisfies a requested role filter.
+     */
     private boolean matchesRole(String value, String desired) {
         if (!StringUtils.hasText(desired)) {
             return true;
@@ -730,6 +811,9 @@ public class ChatbotService {
         return normalizedValue.contains(normalizedDesired);
     }
 
+    /**
+     * Resolves the country from context, locale, or path metadata.
+     */
     private String resolveCountry(ConsolidatedEnrichedSection section, String locale) {
         String fromEnvelope = mapCountryAlias(asStringFromContext(section, "envelope", "country"));
         if (StringUtils.hasText(fromEnvelope)) {
@@ -753,6 +837,9 @@ public class ChatbotService {
         return null;
     }
 
+    /**
+     * Derives the effective search criteria from request and interpretation signals.
+     */
     private SearchCriteria buildCriteria(ChatbotRequest request, QueryInterpretation interpretation) {
         String originalMessage = request != null ? request.getMessage() : null;
         String interpretedQuery = interpretation != null ? interpretation.rawQuery() : null;
@@ -827,6 +914,9 @@ public class ChatbotService {
         return builder.build();
     }
 
+    /**
+     * Builds context inferred directly from the current search criteria.
+     */
     private Map<String, Object> buildDerivedContext(SearchCriteria criteria) {
         if (criteria == null) {
             return Collections.emptyMap();
@@ -851,6 +941,9 @@ public class ChatbotService {
         return context.isEmpty() ? Collections.emptyMap() : context;
     }
 
+    /**
+     * Deep-merges two context maps with deterministic precedence.
+     */
     private Map<String, Object> mergeContext(Map<String, Object> base,
                                              Map<String, Object> addition) {
         if ((base == null || base.isEmpty()) && (addition == null || addition.isEmpty())) {
@@ -867,6 +960,9 @@ public class ChatbotService {
         return merged;
     }
 
+    /**
+     * Resolves merge conflicts for nested context structures.
+     */
     private Object mergeContextValue(Object existing, Object addition) {
         if (existing instanceof Map<?, ?> existingMap && addition instanceof Map<?, ?> additionMap) {
             Map<String, Object> result = new LinkedHashMap<>();
@@ -883,6 +979,9 @@ public class ChatbotService {
         return addition;
     }
 
+    /**
+     * Adds either a scalar or collection into a cumulative set.
+     */
     private void addToSet(Set<Object> target, Object value) {
         if (value instanceof Collection<?> collection) {
             for (Object item : collection) {
@@ -895,6 +994,9 @@ public class ChatbotService {
         }
     }
 
+    /**
+     * Produces a defensive copy of nested context structures.
+     */
     private Object copyValue(Object value) {
         if (value instanceof Map<?, ?> map) {
             Map<String, Object> copy = new LinkedHashMap<>();
@@ -911,6 +1013,9 @@ public class ChatbotService {
         return value;
     }
 
+    /**
+     * Removes blank strings and empty containers from context blocks.
+     */
     private Map<String, Object> sanitizeContext(Map<String, Object> context) {
         if (context == null || context.isEmpty()) {
             return Collections.emptyMap();
@@ -925,6 +1030,9 @@ public class ChatbotService {
         return cleaned.isEmpty() ? Collections.emptyMap() : cleaned;
     }
 
+    /**
+     * Recursively sanitizes a context value node.
+     */
     private Object sanitizeContextValue(Object value) {
         if (value == null) {
             return null;
@@ -956,6 +1064,9 @@ public class ChatbotService {
         return value;
     }
 
+    /**
+     * Extracts the normalized section key from stored context or metadata.
+     */
     private String extractSectionKeyFromSection(ConsolidatedEnrichedSection section) {
         if (section == null) {
             return null;
@@ -977,6 +1088,9 @@ public class ChatbotService {
         return normalizeKey(section.getOriginalFieldName());
     }
 
+    /**
+     * Parses a section key token from the raw user message.
+     */
     private String extractSectionKey(String message) {
         if (!StringUtils.hasText(message)) {
             return null;
@@ -988,6 +1102,9 @@ public class ChatbotService {
         return null;
     }
 
+    /**
+     * Extracts an explicit role request from the user's phrasing.
+     */
     private String extractRole(String message) {
         if (!StringUtils.hasText(message)) {
             return null;
@@ -1022,6 +1139,9 @@ public class ChatbotService {
         return null;
     }
 
+    /**
+     * Cleans up free-form role fragments into normalized tokens.
+     */
     private String sanitizeRoleCandidate(String candidate) {
         if (!StringUtils.hasText(candidate)) {
             return null;
@@ -1042,10 +1162,16 @@ public class ChatbotService {
         return lower;
     }
 
+    /**
+     * Attempts to find a page identifier reference in the message.
+     */
     private String extractPageId(String message) {
         return extractPageId(message, LocaleHints.EMPTY);
     }
 
+    /**
+     * Page-id extractor that uses locale hints as exclusions.
+     */
     private String extractPageId(String message, LocaleHints hints) {
         if (!StringUtils.hasText(message)) {
             return null;
@@ -1109,6 +1235,9 @@ public class ChatbotService {
         return null;
     }
 
+    /**
+     * Scans the user message for explicit locale, language, or country tokens.
+     */
     private LocaleHints parseLocaleHints(String message) {
         if (!StringUtils.hasText(message)) {
             return LocaleHints.EMPTY;
@@ -1170,6 +1299,9 @@ public class ChatbotService {
         );
     }
 
+    /**
+     * Normalizes arbitrary keys into lowercase slugs.
+     */
     private String normalizeKey(String key) {
         if (!StringUtils.hasText(key)) {
             return null;
@@ -1177,6 +1309,9 @@ public class ChatbotService {
         return key.trim().toLowerCase(Locale.ROOT);
     }
 
+    /**
+     * Converts a phrase into a slug usable as section key.
+     */
     private String slugify(String value) {
         if (!StringUtils.hasText(value)) {
             return null;
@@ -1193,6 +1328,9 @@ public class ChatbotService {
         return StringUtils.hasText(slug) ? slug : null;
     }
 
+    /**
+     * Trims and lowercases role descriptors.
+     */
     private String normalizeRole(String value) {
         if (!StringUtils.hasText(value)) {
             return null;
@@ -1200,6 +1338,9 @@ public class ChatbotService {
         return value.trim().toLowerCase(Locale.ROOT);
     }
 
+    /**
+     * Normalizes page identifiers for consistent comparisons.
+     */
     private String normalizePageId(String value) {
         if (!StringUtils.hasText(value)) {
             return null;
@@ -1207,6 +1348,9 @@ public class ChatbotService {
         return value.trim().toLowerCase(Locale.ROOT);
     }
 
+    /**
+     * Normalizes locales to the lang_COUNTRY format.
+     */
     private String normalizeLocale(String value) {
         if (!StringUtils.hasText(value)) {
             return null;
@@ -1219,6 +1363,9 @@ public class ChatbotService {
         return null;
     }
 
+    /**
+     * Normalizes language tokens, handling compound locale strings.
+     */
     private String normalizeLanguage(String value) {
         if (!StringUtils.hasText(value)) {
             return null;
@@ -1235,10 +1382,16 @@ public class ChatbotService {
         return normalizeLanguageToken(trimmed);
     }
 
+    /**
+     * Maps country names, iso2, or iso3 codes back to ISO2 values.
+     */
     private String mapCountryAlias(String value) {
         return mapCountryCode(value);
     }
 
+    /**
+     * Pulls the tenant segment from known DAM paths.
+     */
     private String extractTenantFromPath(String path) {
         if (!StringUtils.hasText(path)) {
             return null;
@@ -1250,6 +1403,9 @@ public class ChatbotService {
         return null;
     }
 
+    /**
+     * Reads the immediate page segment from locale-scoped paths.
+     */
     private String extractPageIdFromPath(String path) {
         if (!StringUtils.hasText(path)) {
             return null;
@@ -1261,6 +1417,9 @@ public class ChatbotService {
         return null;
     }
 
+    /**
+     * Extracts locale tokens embedded inside a CMS path.
+     */
     private String extractLocaleFromPath(String path) {
         if (!StringUtils.hasText(path)) {
             return null;
@@ -1272,6 +1431,9 @@ public class ChatbotService {
         return null;
     }
 
+    /**
+     * Returns the first non-blank string within an array.
+     */
     private String firstNonBlank(String... values) {
         if (values == null) {
             return null;
@@ -1284,6 +1446,9 @@ public class ChatbotService {
         return null;
     }
 
+    /**
+     * Helper to read nested context values as strings.
+     */
     private String asStringFromContext(ConsolidatedEnrichedSection section, String topLevelKey, String nestedKey) {
         if (section == null || section.getContext() == null) {
             return null;
@@ -1295,6 +1460,9 @@ public class ChatbotService {
         return firstString(parent.get(nestedKey));
     }
 
+    /**
+     * Converts a raw object into a mutable string-keyed map when possible.
+     */
     private Map<String, Object> asMap(Object value) {
         if (value instanceof Map<?, ?> map) {
             Map<String, Object> copy = new LinkedHashMap<>();
@@ -1304,6 +1472,9 @@ public class ChatbotService {
         return null;
     }
 
+    /**
+     * Returns the first available non-blank string from heterogenous structures.
+     */
     private String firstString(Object value) {
         if (value instanceof String str && StringUtils.hasText(str)) {
             return str;
@@ -1318,6 +1489,9 @@ public class ChatbotService {
         return null;
     }
 
+    /**
+     * Determines whether a token corresponds to a country reference.
+     */
     private boolean isCountryToken(String value, Set<String> knownCountries) {
         if (!StringUtils.hasText(value)) {
             return false;
@@ -1329,6 +1503,9 @@ public class ChatbotService {
         return mapCountryCode(value) != null;
     }
 
+    /**
+     * Converts arbitrary language names into ISO-639-1 codes when recognized.
+     */
     private String normalizeLanguageToken(String token) {
         if (!StringUtils.hasText(token)) {
             return null;
@@ -1341,10 +1518,16 @@ public class ChatbotService {
         return languageIndex.get(sanitized);
     }
 
+    /**
+     * Sanitizes human-readable language names for lookup indexes.
+     */
     private String sanitizeLanguageKey(String value) {
         return value.toLowerCase(Locale.ROOT).replaceAll("[^a-z]", "");
     }
 
+    /**
+     * Builds the canonical set of ISO language codes for validation.
+     */
     private Set<String> buildIsoLanguageCodes() {
         LinkedHashSet<String> codes = Arrays.stream(Locale.getISOLanguages())
                 .map(code -> code.toLowerCase(Locale.ROOT))
@@ -1352,6 +1535,9 @@ public class ChatbotService {
         return Collections.unmodifiableSet(codes);
     }
 
+    /**
+     * Builds a mapping between localized language names and ISO codes.
+     */
     private Map<String, String> buildLanguageIndex() {
         Map<String, String> index = new LinkedHashMap<>();
         for (String iso : Locale.getISOLanguages()) {
@@ -1362,6 +1548,9 @@ public class ChatbotService {
         return Collections.unmodifiableMap(index);
     }
 
+    /**
+     * Adds a single language alias into the lookup index.
+     */
     private void addLanguageMapping(Map<String, String> index, String value, String code) {
         if (!StringUtils.hasText(value) || !StringUtils.hasText(code)) {
             return;
@@ -1373,6 +1562,9 @@ public class ChatbotService {
         index.putIfAbsent(sanitized, code.toLowerCase(Locale.ROOT));
     }
 
+    /**
+     * Materializes the ISO country set for quick membership checks.
+     */
     private Set<String> buildIsoCountryCodes() {
         LinkedHashSet<String> codes = Arrays.stream(Locale.getISOCountries())
                 .map(code -> code.toUpperCase(Locale.ROOT))
@@ -1380,6 +1572,9 @@ public class ChatbotService {
         return Collections.unmodifiableSet(codes);
     }
 
+    /**
+     * Builds ISO-3 to ISO-2 conversion mappings.
+     */
     private Map<String, String> buildIso3ToIso2Index() {
         Map<String, String> index = new LinkedHashMap<>();
         for (String iso2 : Locale.getISOCountries()) {
@@ -1396,6 +1591,9 @@ public class ChatbotService {
         return Collections.unmodifiableMap(index);
     }
 
+    /**
+     * Compiles a multilingual map of country aliases to ISO-2 codes.
+     */
     private Map<String, String> buildCountryIndex() {
         Map<String, String> index = new LinkedHashMap<>();
         for (String iso2 : Locale.getISOCountries()) {
@@ -1415,6 +1613,9 @@ public class ChatbotService {
         return Collections.unmodifiableMap(index);
     }
 
+    /**
+     * Adds a new alias entry into the country index.
+     */
     private void addCountryMapping(Map<String, String> index, String value, String iso2) {
         if (!StringUtils.hasText(value) || !StringUtils.hasText(iso2)) {
             return;
@@ -1426,10 +1627,16 @@ public class ChatbotService {
         index.putIfAbsent(sanitized, iso2.toUpperCase(Locale.ROOT));
     }
 
+    /**
+     * Normalizes country tokens for consistent dictionary lookups.
+     */
     private String sanitizeCountryKey(String value) {
         return value.toLowerCase(Locale.ROOT).replaceAll("[^a-z]", "");
     }
 
+    /**
+     * Maps arbitrary country words or codes into an ISO-2 representation.
+     */
     private String mapCountryCode(String value) {
         if (!StringUtils.hasText(value)) {
             return null;
@@ -1467,6 +1674,9 @@ public class ChatbotService {
         return null;
     }
 
+    /**
+     * Returns the first item of a set or null when absent.
+     */
     private String firstOf(Set<String> values) {
         if (values == null || values.isEmpty()) {
             return null;
@@ -1474,10 +1684,16 @@ public class ChatbotService {
         return values.iterator().next();
     }
 
+    /**
+     * Encapsulates tokens gleaned from the user message for downstream inference.
+     */
     private record LocaleHints(Set<String> locales, Set<String> languages, Set<String> countries) {
         private static final LocaleHints EMPTY = new LocaleHints(Set.of(), Set.of(), Set.of());
     }
 
+    /**
+     * Immutable holder describing the normalized query intent.
+     */
     private record SearchCriteria(String sectionKey,
                                   String role,
                                   String locale,
@@ -1485,10 +1701,16 @@ public class ChatbotService {
                                   String country,
                                   String pageId,
                                   String message) {
+        /**
+         * Returns the string that should feed the embedding pipeline.
+         */
         String embeddingQuery() {
             return StringUtils.hasText(message) ? message : sectionKey;
         }
 
+        /**
+         * Produces a copy without role constraints.
+         */
         SearchCriteria withoutRole() {
             if (role == null || role.isBlank()) {
                 return this;
@@ -1496,6 +1718,9 @@ public class ChatbotService {
             return new SearchCriteria(sectionKey, null, locale, language, country, pageId, message);
         }
 
+        /**
+         * Returns a copy with a new section key when it changes.
+         */
         SearchCriteria withSectionKey(String newSectionKey) {
             String normalized = StringUtils.hasText(newSectionKey) ? newSectionKey : null;
             if (Objects.equals(sectionKey, normalized)) {
@@ -1504,6 +1729,9 @@ public class ChatbotService {
             return new SearchCriteria(normalized, role, locale, language, country, pageId, message);
         }
 
+        /**
+         * Returns a copy with an updated page identifier.
+         */
         SearchCriteria withPageId(String newPageId) {
             String normalized = StringUtils.hasText(newPageId) ? newPageId : null;
             if (Objects.equals(pageId, normalized)) {
@@ -1512,6 +1740,9 @@ public class ChatbotService {
             return new SearchCriteria(sectionKey, role, locale, language, country, normalized, message);
         }
 
+        /**
+         * Produces a version with locale, language, country, and page context removed.
+         */
         SearchCriteria withoutContext() {
             if ((locale == null || locale.isBlank())
                     && (language == null || language.isBlank())
@@ -1523,6 +1754,9 @@ public class ChatbotService {
         }
     }
 
+    /**
+     * Mutable builder used to compose SearchCriteria incrementally.
+     */
     private static final class SearchCriteriaBuilder {
         private String sectionKey;
         private String role;
@@ -1532,6 +1766,9 @@ public class ChatbotService {
         private String pageId;
         private String message;
 
+        /**
+         * Applies a candidate section key to the builder.
+         */
         SearchCriteriaBuilder sectionKey(String sectionKey) {
             if (StringUtils.hasText(sectionKey)) {
                 this.sectionKey = sectionKey;
@@ -1539,6 +1776,9 @@ public class ChatbotService {
             return this;
         }
 
+        /**
+         * Sets the desired role if provided.
+         */
         SearchCriteriaBuilder role(String role) {
             if (StringUtils.hasText(role)) {
                 this.role = role;
@@ -1546,6 +1786,9 @@ public class ChatbotService {
             return this;
         }
 
+        /**
+         * Saves a locale hint if available.
+         */
         SearchCriteriaBuilder locale(String locale) {
             if (StringUtils.hasText(locale)) {
                 this.locale = locale;
@@ -1553,6 +1796,9 @@ public class ChatbotService {
             return this;
         }
 
+        /**
+         * Persists a language hint onto the builder.
+         */
         SearchCriteriaBuilder language(String language) {
             if (StringUtils.hasText(language)) {
                 this.language = language;
@@ -1560,6 +1806,9 @@ public class ChatbotService {
             return this;
         }
 
+        /**
+         * Records the country hint when present.
+         */
         SearchCriteriaBuilder country(String country) {
             if (StringUtils.hasText(country)) {
                 this.country = country;
@@ -1567,6 +1816,9 @@ public class ChatbotService {
             return this;
         }
 
+        /**
+         * Assigns the page identifier if provided.
+         */
         SearchCriteriaBuilder pageId(String pageId) {
             if (StringUtils.hasText(pageId)) {
                 this.pageId = pageId;
@@ -1574,6 +1826,9 @@ public class ChatbotService {
             return this;
         }
 
+        /**
+         * Captures the original message used for embeddings.
+         */
         SearchCriteriaBuilder message(String message) {
             this.message = message;
             return this;
@@ -1599,6 +1854,9 @@ public class ChatbotService {
             return pageId;
         }
 
+        /**
+         * Creates an immutable SearchCriteria snapshot.
+         */
         SearchCriteria build() {
             return new SearchCriteria(sectionKey, role, locale, language, country, pageId, message);
         }

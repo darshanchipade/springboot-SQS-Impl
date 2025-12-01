@@ -37,6 +37,9 @@ public class AiPromptSearchService {
         this.objectMapper = objectMapper;
     }
 
+    /**
+     * Runs the AI-assisted search workflow for the interactive prompt experience.
+     */
     public List<ChatbotResultDto> aiSearch(ChatbotRequest request) {
         String userMessage = request != null ? request.getMessage() : null;
         if (!StringUtils.hasText(userMessage)) return List.of();
@@ -228,6 +231,9 @@ public class AiPromptSearchService {
 
     // Helpers
 
+    /**
+     * Transforms a consolidated section into a DTO tailored for AI search responses.
+     */
     private ChatbotResultDto toDto(ConsolidatedEnrichedSection section, String source) {
         ChatbotResultDto dto = new ChatbotResultDto();
         dto.setSection("ai-search");
@@ -245,6 +251,9 @@ public class AiPromptSearchService {
         return dto;
     }
 
+    /**
+     * Loads the Bedrock prompt template from resources with a fallback literal.
+     */
     private String loadPromptTemplate() {
         try {
             ClassPathResource resource = new ClassPathResource("prompts/interactive_search_prompt.txt");
@@ -257,6 +266,9 @@ public class AiPromptSearchService {
         }
     }
 
+    /**
+     * Converts a JSON node into a list of strings, accepting scalars or arrays.
+     */
     private List<String> readStrings(JsonNode node) {
         if (node == null || node.isNull()) return List.of();
         if (node.isTextual()) return List.of(node.asText());
@@ -268,6 +280,9 @@ public class AiPromptSearchService {
         return List.of();
     }
 
+    /**
+     * Removes Markdown-style JSON fences produced by some models.
+     */
     private String stripJsonFences(String text) {
         if (text == null) return null;
         String trimmed = text.trim();
@@ -281,6 +296,9 @@ public class AiPromptSearchService {
         return trimmed;
     }
 
+    /**
+     * Attempts to find a section key within user free text.
+     */
     private String extractSectionKey(String text) {
         if (!StringUtils.hasText(text)) return null;
         var m = SECTION_KEY_PATTERN.matcher(text);
@@ -294,11 +312,17 @@ public class AiPromptSearchService {
         return null;
     }
 
+    /**
+     * Normalizes section keys to lowercase tokens.
+     */
     private String normalizeKey(String key) {
         if (!StringUtils.hasText(key)) return null;
         return key.trim().toLowerCase();
     }
 
+    /**
+     * Infers a likely role (e.g., headline) from the phrasing.
+     */
     private String inferRoleHint(String text, String sectionKey) {
         if (!StringUtils.hasText(text)) return null;
         String t = text.toLowerCase(Locale.ROOT).trim();
@@ -337,6 +361,9 @@ public class AiPromptSearchService {
         return StringUtils.hasText(chosen) ? chosen : null;
     }
 
+    /**
+     * Checks whether the user explicitly asked for a role-specific answer.
+     */
     private boolean userExplicitlyRequestedRole(String text, String sectionKey) {
         if (!StringUtils.hasText(text)) return false;
         String t = text.toLowerCase(Locale.ROOT);
@@ -351,6 +378,9 @@ public class AiPromptSearchService {
         return Pattern.compile("(?i)\\b(?:give\\s+me\\s+)?([a-z0-9_-]{3,})\\s+(?:for|of)\\b").matcher(t).find();
     }
 
+    /**
+     * Reconciles a requested role with the actual roles available on sections.
+     */
     private String pickBestRole(String roleCandidate, List<ConsolidatedEnrichedSection> rows) {
         List<String> available = rows.stream()
                 .map(ConsolidatedEnrichedSection::getOriginalFieldName)
@@ -375,6 +405,9 @@ public class AiPromptSearchService {
         return null;
     }
 
+    /**
+     * Derives locale metadata from context or paths.
+     */
     private String extractLocale(ConsolidatedEnrichedSection s) {
         if (s.getContext() != null) {
             Object env = s.getContext().get("envelope");
@@ -388,6 +421,9 @@ public class AiPromptSearchService {
         return fromPath;
     }
 
+    /**
+     * Resolves the tenant (site) associated with a section.
+     */
     private String extractTenant(ConsolidatedEnrichedSection s) {
         if (s.getContext() != null) {
             Object env = s.getContext().get("envelope");
@@ -402,12 +438,18 @@ public class AiPromptSearchService {
         return fromPath != null ? fromPath : "applecom-cms";
     }
 
+    /**
+     * Extracts a page identifier from URIs or paths.
+     */
     private String extractPageId(ConsolidatedEnrichedSection s) {
         String pid = extractPageIdFromPath(s.getSectionUri());
         if (pid == null) pid = extractPageIdFromPath(s.getSectionPath());
         return pid;
     }
 
+    /**
+     * Reads locale tokens embedded in CMS paths.
+     */
     private String extractLocaleFromPath(String path) {
         if (!StringUtils.hasText(path)) return null;
         var m = Pattern.compile("/([a-z]{2}_[A-Z]{2})/").matcher(path);
@@ -415,6 +457,9 @@ public class AiPromptSearchService {
         return null;
     }
 
+    /**
+     * Pulls tenant information from DAM paths.
+     */
     private String extractTenantFromPath(String path) {
         if (!StringUtils.hasText(path)) return null;
         var m = Pattern.compile("/content/dam/([^/]+)/").matcher(path);
@@ -422,6 +467,9 @@ public class AiPromptSearchService {
         return null;
     }
 
+    /**
+     * Determines the page segment from locale-qualified paths.
+     */
     private String extractPageIdFromPath(String path) {
         if (!StringUtils.hasText(path)) return null;
         var m = Pattern.compile("/[a-z]{2}_[A-Z]{2}/([^/]+)/").matcher(path);
