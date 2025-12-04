@@ -87,43 +87,30 @@ public class DataExtractionController {
         try {
             String content = new String(file.getBytes());
             CleansedDataStore cleansedDataEntry = dataIngestionService.ingestAndCleanseJsonPayload(content, sourceIdentifier);
-
-            if (cleansedDataEntry != null && cleansedDataEntry.getId() != null) {
-                ObjectNode responseJson = objectMapper.createObjectNode();
-                responseJson.put("cleansedDataStoreId", cleansedDataEntry.getId().toString());
-                responseJson.put("status", cleansedDataEntry.getStatus());
-
-                // Trigger enrichment in a new thread
-                handleIngestionAndTriggerEnrichment(cleansedDataEntry, sourceIdentifier);
-
-                return ResponseEntity.status(HttpStatus.ACCEPTED).body(responseJson.toString());
-            } else {
-                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Failed to process file.");
-            }
-
+            return handleCleansingOutcome(cleansedDataEntry, sourceIdentifier);
         } catch (IOException e) {
             logger.error("Error reading uploaded file", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Error reading file");
         }
     }
-private String deriveSourceIdentifier(MultipartFile file) {
-    // Get the original filename, e.g., "internal-425-Test-1-US.json"
-    String originalFilename = file.getOriginalFilename();
-    String sanitizedFilename = (originalFilename != null) ? originalFilename.trim() : "";
-    if (!sanitizedFilename.isEmpty()) {
-        sanitizedFilename = sanitizedFilename.replace("\\", "/");
-        int lastSlash = sanitizedFilename.lastIndexOf('/');
-        if (lastSlash >= 0 && lastSlash < sanitizedFilename.length() - 1) {
-            sanitizedFilename = sanitizedFilename.substring(lastSlash + 1);
+    private String deriveSourceIdentifier(MultipartFile file) {
+        // Get the original filename, e.g., "internal-425-Test-1-US.json"
+        String originalFilename = file.getOriginalFilename();
+        String sanitizedFilename = (originalFilename != null) ? originalFilename.trim() : "";
+        if (!sanitizedFilename.isEmpty()) {
+            sanitizedFilename = sanitizedFilename.replace("\\", "/");
+            int lastSlash = sanitizedFilename.lastIndexOf('/');
+            if (lastSlash >= 0 && lastSlash < sanitizedFilename.length() - 1) {
+                sanitizedFilename = sanitizedFilename.substring(lastSlash + 1);
+            }
         }
+        // If for some reason the filename is empty, fall back to a UUID
+        if (sanitizedFilename.isEmpty()) {
+            sanitizedFilename = "File-upload-" + UUID.randomUUID();
+        }
+        // Prepend "file-upload:" to the filename
+        return "file-upload:" + sanitizedFilename;
     }
-    // If for some reason the filename is empty, fall back to a UUID
-    if (sanitizedFilename.isEmpty()) {
-        sanitizedFilename = "File-upload-" + UUID.randomUUID();
-    }
-    // Prepend "file-upload:" to the filename
-    return "file-upload:" + sanitizedFilename;
-}
 
     @Operation(
             summary = "Ingest JSON payload",
@@ -153,7 +140,7 @@ private String deriveSourceIdentifier(MultipartFile file) {
             }
 
             cleansedDataEntry = dataIngestionService.ingestAndCleanseJsonPayload(jsonPayload, sourceIdentifier);
-            return handleIngestionAndTriggerEnrichment(cleansedDataEntry, sourceIdentifier);
+            return handleCleansingOutcome(cleansedDataEntry, sourceIdentifier);
 
         } catch (IllegalArgumentException e) {
             logger.error("Invalid argument processing JSON payload for identifier: {}. Error: {}", sourceIdentifier, e.getMessage(), e);
@@ -183,7 +170,39 @@ private String deriveSourceIdentifier(MultipartFile file) {
                 .orElse("NOT_FOUND");
     }
 
-    private ResponseEntity<String> handleIngestionAndTriggerEnrichment(CleansedDataStore cleansedDataEntry, String identifierForLog) {
+    @Operation(
+            summary = "Trigger enrichment for an existing cleansed data record",
+            description = "Starts enrichment asynchronously for the provided cleansedDataStoreId. "
+                    + "Only records in CLEANSED_PENDING_ENRICHMENT status can be processed."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "202", description = "Enrichment accepted"),
+            @ApiResponse(responseCode = "404", description = "Cleansed data record not found"),
+            @ApiResponse(responseCode = "409", description = "Record not ready for enrichment"),
+            @ApiResponse(responseCode = "500", description = "Enrichment trigger failed")
+    })
+    @PostMapping("/enrichment/start/{id}")
+    public ResponseEntity<String> startEnrichment(
+            @Parameter(description = "UUID of the cleansed data entry", required = true)
+            @PathVariable("id") UUID cleansedDataStoreId) {
+
+        CleansedDataStore cleansedDataEntry = cleansedDataStoreRepository.findById(cleansedDataStoreId)
+                .orElse(null);
+
+        if (cleansedDataEntry == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body("CleansedDataStore not found for id " + cleansedDataStoreId);
+        }
+
+        if (!"CLEANSED_PENDING_ENRICHMENT".equalsIgnoreCase(cleansedDataEntry.getStatus())) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body("CleansedDataStore " + cleansedDataStoreId + " is not awaiting enrichment. Current status: " + cleansedDataEntry.getStatus());
+        }
+
+        return triggerEnrichmentAsync(cleansedDataEntry, "manual-trigger");
+    }
+
+    private ResponseEntity<String> handleCleansingOutcome(CleansedDataStore cleansedDataEntry, String identifierForLog) {
         if (cleansedDataEntry == null || cleansedDataEntry.getId() == null) {
             String statusMsg = (cleansedDataEntry != null && cleansedDataEntry.getStatus() != null) ?
                     cleansedDataEntry.getStatus() : "Ingestion service returned null or ID-less CleansedDataStore.";
@@ -208,7 +227,8 @@ private String deriveSourceIdentifier(MultipartFile file) {
 
         if ("NO_CONTENT_EXTRACTED".equalsIgnoreCase(currentStatus) || "PROCESSED_EMPTY_ITEMS".equalsIgnoreCase(currentStatus)) {
             logger.info("Processing for {} completed with status: {}. No content for enrichment. CleansedDataID: {}", identifierForLog, currentStatus, cleansedDataStoreId);
-            return ResponseEntity.ok("Source processed. No content extracted for enrichment. CleansedDataID: " + cleansedDataStoreId + ", Status: " + currentStatus);
+            return buildJsonResponse(HttpStatus.OK, cleansedDataStoreId, currentStatus,
+                    "Source processed. No content extracted for enrichment.");
         }
 
         if (!"CLEANSED_PENDING_ENRICHMENT".equalsIgnoreCase(currentStatus)) {
@@ -218,8 +238,14 @@ private String deriveSourceIdentifier(MultipartFile file) {
                     .body("Data ingestion/cleansing for " + identifierForLog + " resulted in status '" + currentStatus + "', cannot proceed to enrichment.");
         }
 
-        logger.info("Proceeding to enrichment for CleansedDataStore ID: {} from identifier: {}", cleansedDataStoreId, identifierForLog);
+        logger.info("Cleansing complete for identifier: {}. CleansedDataStore ID: {} is awaiting enrichment trigger.", identifierForLog, cleansedDataStoreId);
+        return buildJsonResponse(HttpStatus.ACCEPTED, cleansedDataStoreId, currentStatus,
+                "Cleansing finished. Use POST /api/enrichment/start/" + cleansedDataStoreId + " to trigger enrichment.");
+    }
 
+    private ResponseEntity<String> triggerEnrichmentAsync(CleansedDataStore cleansedDataEntry, String triggerSource) {
+        UUID cleansedDataStoreId = cleansedDataEntry.getId();
+        logger.info("Proceeding to enrichment for CleansedDataStore ID: {} via {}", cleansedDataStoreId, triggerSource);
         final CleansedDataStore finalCleansedDataEntry = cleansedDataEntry;
         new Thread(() -> {
             try {
@@ -230,9 +256,22 @@ private String deriveSourceIdentifier(MultipartFile file) {
             }
         }).start();
 
-        String successMessage = String.format("Request for %s accepted. CleansedDataID: %s. Enrichment processing initiated in background. Current status: %s",
-                identifierForLog, cleansedDataStoreId.toString(), normalizeStatus(currentStatus));
-        return ResponseEntity.status(HttpStatus.ACCEPTED).body(successMessage);
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+                .body("Enrichment started for CleansedDataStore " + cleansedDataStoreId + ". Triggered by " + triggerSource + ".");
+    }
+
+    private ResponseEntity<String> buildJsonResponse(HttpStatus status, UUID cleansedDataStoreId, String pipelineStatus, String message) {
+        ObjectNode node = objectMapper.createObjectNode();
+        if (cleansedDataStoreId != null) {
+            node.put("cleansedDataStoreId", cleansedDataStoreId.toString());
+        }
+        if (pipelineStatus != null) {
+            node.put("status", normalizeStatus(pipelineStatus));
+        }
+        if (message != null) {
+            node.put("message", message);
+        }
+        return ResponseEntity.status(status).body(node.toString());
     }
 
     private String normalizeStatus(String status) {
