@@ -227,7 +227,7 @@ public class DataExtractionController {
 
         if ("NO_CONTENT_EXTRACTED".equalsIgnoreCase(currentStatus) || "PROCESSED_EMPTY_ITEMS".equalsIgnoreCase(currentStatus)) {
             logger.info("Processing for {} completed with status: {}. No content for enrichment. CleansedDataID: {}", identifierForLog, currentStatus, cleansedDataStoreId);
-            return buildJsonResponse(HttpStatus.OK, cleansedDataStoreId, currentStatus,
+            return buildJsonResponse(HttpStatus.OK, cleansedDataEntry, currentStatus,
                     "Source processed. No content extracted for enrichment.");
         }
 
@@ -239,7 +239,7 @@ public class DataExtractionController {
         }
 
         logger.info("Cleansing complete for identifier: {}. CleansedDataStore ID: {} is awaiting enrichment trigger.", identifierForLog, cleansedDataStoreId);
-        return buildJsonResponse(HttpStatus.ACCEPTED, cleansedDataStoreId, currentStatus,
+        return buildJsonResponse(HttpStatus.ACCEPTED, cleansedDataEntry, currentStatus,
                 "Cleansing finished. Use POST /api/enrichment/start/" + cleansedDataStoreId + " to trigger enrichment.");
     }
 
@@ -260,10 +260,18 @@ public class DataExtractionController {
                 .body("Enrichment started for CleansedDataStore " + cleansedDataStoreId + ". Triggered by " + triggerSource + ".");
     }
 
-    private ResponseEntity<String> buildJsonResponse(HttpStatus status, UUID cleansedDataStoreId, String pipelineStatus, String message) {
+    private ResponseEntity<String> buildJsonResponse(HttpStatus status, CleansedDataStore cleansedDataEntry, String pipelineStatus, String message) {
         ObjectNode node = objectMapper.createObjectNode();
-        if (cleansedDataStoreId != null) {
-            node.put("cleansedDataStoreId", cleansedDataStoreId.toString());
+        if (cleansedDataEntry != null) {
+            if (cleansedDataEntry.getId() != null) {
+                node.put("cleansedDataStoreId", cleansedDataEntry.getId().toString());
+            }
+            if (cleansedDataEntry.getCleansedItems() != null) {
+                node.set("cleansedItems", objectMapper.valueToTree(cleansedDataEntry.getCleansedItems()));
+            }
+            if (cleansedDataEntry.getCleansingErrors() != null && !cleansedDataEntry.getCleansingErrors().isEmpty()) {
+                node.set("cleansingErrors", objectMapper.valueToTree(cleansedDataEntry.getCleansingErrors()));
+            }
         }
         if (pipelineStatus != null) {
             node.put("status", normalizeStatus(pipelineStatus));
