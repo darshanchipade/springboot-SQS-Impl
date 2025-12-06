@@ -70,7 +70,7 @@ public class DataIngestionService {
     private boolean keepBlankAfterCleanse;
 
     // If true, bypass change filter and return all extracted items
-    @Value("${app.ingestion.return-all-items:false}")
+    @Value("${app.ingestion.return-all-items:true}")
     private boolean returnAllItems;
 
     // If true, include contextHash in change detection
@@ -737,6 +737,8 @@ public class DataIngestionService {
             item.put("cleansedContent", cleansedContent);
             item.put("contentHash", calculateContentHash(cleansedContent, null));
             item.put("skipEnrichment", skipEnrichment);
+            item.put("originalValue", content);
+            item.put("cleansedValue", cleansedContent);
             try {
                 item.put("context", objectMapper.convertValue(finalContext, new com.fasterxml.jackson.core.type.TypeReference<>() {}));
                 // Ensure stable property and map ordering when hashing
