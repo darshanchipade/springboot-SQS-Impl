@@ -334,6 +334,45 @@ public class DataIngestionService {
         return processLoadedContent(jsonPayload, rawDataStore);
     }
 
+    /**
+     * Replays the cleansing pipeline for an existing CleansedDataStore record without re-uploading
+     * the original payload. This allows downstream steps (cleansing/enrichment) to continue to use
+     * the original source metadata (e.g. file-upload/S3 identifiers) instead of creating a new API
+     * payload entry.
+     *
+     * @param cleansedDataStoreId existing CleansedDataStore identifier.
+     * @return the refreshed CleansedDataStore entry after reprocessing.
+     */
+    @Transactional
+    public CleansedDataStore resumeFromExistingCleansedId(UUID cleansedDataStoreId) {
+        if (cleansedDataStoreId == null) {
+            throw new IllegalArgumentException("CleansedDataStore id must be provided to resume processing.");
+        }
+
+        CleansedDataStore existingCleansed = cleansedDataStoreRepository.findById(cleansedDataStoreId)
+                .orElseThrow(() -> new IllegalArgumentException("No CleansedDataStore found for id " + cleansedDataStoreId));
+
+        UUID rawDataId = existingCleansed.getRawDataId();
+        if (rawDataId == null) {
+            throw new IllegalStateException("CleansedDataStore " + cleansedDataStoreId + " is missing a rawDataId reference.");
+        }
+
+        RawDataStore rawDataStore = rawDataStoreRepository.findById(rawDataId)
+                .orElseThrow(() -> new IllegalStateException("RawDataStore " + rawDataId + " referenced by cleansed record " + cleansedDataStoreId + " was not found."));
+
+        String rawJsonContent = rawDataStore.getRawContentText();
+        if ((rawJsonContent == null || rawJsonContent.isBlank()) && rawDataStore.getRawContentBinary() != null) {
+            rawJsonContent = new String(rawDataStore.getRawContentBinary(), StandardCharsets.UTF_8);
+        }
+
+        if (rawJsonContent == null || rawJsonContent.isBlank()) {
+            throw new IllegalStateException("RawDataStore " + rawDataId + " does not contain stored JSON content to resume processing.");
+        }
+
+        logger.info("Resuming ingestion pipeline for CleansedDataStore {} using RawDataStore {}", cleansedDataStoreId, rawDataId);
+        return processLoadedContent(rawJsonContent, rawDataStore);
+    }
+
     private RawDataStore findOrCreateRawDataStore(String jsonPayload, String sourceIdentifier) {
         if (jsonPayload == null || jsonPayload.trim().isEmpty()) {
             throw new IllegalArgumentException("JSON payload cannot be null or empty for sourceIdentifier " + sourceIdentifier);

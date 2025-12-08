@@ -1,13 +1,7 @@
 package com.apple.springboot.controller;
 
-import com.apple.springboot.dto.CleansedContextMetadata;
-import com.apple.springboot.dto.CleansedContextResponse;
-import com.apple.springboot.dto.CleansedItemRow;
-import com.apple.springboot.dto.CleansedItemsResponse;
 import com.apple.springboot.model.CleansedDataStore;
-import com.apple.springboot.model.RawDataStore;
 import com.apple.springboot.repository.CleansedDataStoreRepository;
-import com.apple.springboot.repository.RawDataStoreRepository;
 import com.apple.springboot.service.DataIngestionService;
 import com.apple.springboot.service.EnrichmentPipelineService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -29,8 +23,9 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.time.OffsetDateTime;
-import java.util.*;
+import java.util.Arrays;
+import java.util.List;
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/api")
@@ -43,7 +38,6 @@ public class DataExtractionController {
     private final EnrichmentPipelineService enrichmentPipelineService;
 
     private final CleansedDataStoreRepository cleansedDataStoreRepository;
-    private final RawDataStoreRepository rawDataStoreRepository;
     private final ObjectMapper objectMapper;
 
     // List of statuses from DataIngestionService that indicate a fatal error before enrichment stage,
@@ -61,14 +55,10 @@ public class DataExtractionController {
 
     @Autowired
     public DataExtractionController(DataIngestionService dataIngestionService,
-                                    EnrichmentPipelineService enrichmentPipelineService,
-                                    CleansedDataStoreRepository cleansedDataStoreRepository,
-                                    RawDataStoreRepository rawDataStoreRepository,
-                                    ObjectMapper objectMapper) {
+                                    EnrichmentPipelineService enrichmentPipelineService, CleansedDataStoreRepository cleansedDataStoreRepository, ObjectMapper objectMapper) {
         this.dataIngestionService = dataIngestionService;
         this.enrichmentPipelineService = enrichmentPipelineService;
         this.cleansedDataStoreRepository = cleansedDataStoreRepository;
-        this.rawDataStoreRepository = rawDataStoreRepository;
         this.objectMapper = objectMapper;
     }
 
@@ -161,6 +151,40 @@ public class DataExtractionController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Error processing JSON payload "+ sourceIdentifier + ": " + e.getMessage());
         }
     }
+
+    @Operation(
+            summary = "Resume ingestion from an existing cleansed record",
+            description = "Replays the cleansing pipeline for an existing CleansedDataStore entry using the "
+                    + "original stored payload, allowing downstream steps to continue without re-uploading JSON."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "202", description = "Resume request accepted"),
+            @ApiResponse(responseCode = "404", description = "Cleansed record not found"),
+            @ApiResponse(responseCode = "409", description = "Cleansed record cannot be replayed"),
+            @ApiResponse(responseCode = "500", description = "Internal server error")
+    })
+    @PostMapping("/ingestion/resume/{id}")
+    public ResponseEntity<String> resumeIngestionFromSnapshot(
+            @Parameter(description = "UUID of the cleansed data entry to replay", required = true)
+            @PathVariable("id") UUID cleansedDataStoreId) {
+        logger.info("Received request to resume ingestion pipeline for CleansedDataStore {}", cleansedDataStoreId);
+        try {
+            CleansedDataStore cleansedDataEntry = dataIngestionService.resumeFromExistingCleansedId(cleansedDataStoreId);
+            return handleCleansingOutcome(cleansedDataEntry, "resume-" + cleansedDataStoreId);
+        } catch (IllegalArgumentException e) {
+            logger.warn("Unable to resume ingestion for {}: {}", cleansedDataStoreId, e.getMessage());
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body("CleansedDataStore not found for id " + cleansedDataStoreId);
+        } catch (IllegalStateException e) {
+            logger.error("CleansedDataStore {} cannot be resumed: {}", cleansedDataStoreId, e.getMessage());
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body("Cannot resume cleansed record " + cleansedDataStoreId + ": " + e.getMessage());
+        } catch (Exception e) {
+            logger.error("Unexpected error while resuming CleansedDataStore {}: {}", cleansedDataStoreId, e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Error resuming cleansed record " + cleansedDataStoreId + ": " + e.getMessage());
+        }
+    }
     @Operation(
             summary = "Get cleansed data status",
             description = "Retrieves the status of a cleansed data entry by its ID. " +
@@ -178,69 +202,6 @@ public class DataExtractionController {
         return cleansedDataStoreRepository.findById(id)
                 .map(store -> normalizeStatus(store.getStatus()))
                 .orElse("NOT_FOUND");
-    }
-
-    @Operation(
-            summary = "Get cleansed context metadata",
-            description = "Returns metadata and context snapshot for a cleansed data entry."
-    )
-    @ApiResponses(value = {
-            @ApiResponse(responseCode = "200", description = "Context retrieved successfully"),
-            @ApiResponse(responseCode = "404", description = "Cleansed data record not found")
-    })
-    @GetMapping("/cleansed-context/{id}")
-    public ResponseEntity<?> getCleansedContext(
-            @Parameter(description = "UUID of the cleansed data entry", required = true)
-            @PathVariable UUID id) {
-
-        Optional<CleansedDataStore> storeOpt = cleansedDataStoreRepository.findById(id);
-        if (storeOpt.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(Map.of("error", "CleansedDataStore not found for id " + id));
-        }
-
-        CleansedDataStore store = storeOpt.get();
-        CleansedContextMetadata metadata = buildContextMetadata(store);
-        CleansedContextResponse response = new CleansedContextResponse(
-                store.getId(),
-                normalizeStatus(store.getStatus()),
-                store.getCleansedAt(),
-                metadata,
-                store.getContext(),
-                store.getCleansedItems() != null ? store.getCleansedItems().size() : 0
-        );
-
-        return ResponseEntity.ok(response);
-    }
-
-    @Operation(
-            summary = "Get cleansed items (original vs cleansed values)",
-            description = "Returns normalized rows containing field name, original value, and cleansed value."
-    )
-    @ApiResponses(value = {
-            @ApiResponse(responseCode = "200", description = "Items retrieved successfully"),
-            @ApiResponse(responseCode = "404", description = "Cleansed data record not found")
-    })
-    @GetMapping("/cleansed-items/{id}")
-    public ResponseEntity<?> getCleansedItems(
-            @Parameter(description = "UUID of the cleansed data entry", required = true)
-            @PathVariable UUID id) {
-
-        Optional<CleansedDataStore> storeOpt = cleansedDataStoreRepository.findById(id);
-        if (storeOpt.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(Map.of("error", "CleansedDataStore not found for id " + id));
-        }
-
-        CleansedDataStore store = storeOpt.get();
-        List<CleansedItemRow> rows = Optional.ofNullable(store.getCleansedItems())
-                .orElse(List.of())
-                .stream()
-                .filter(Objects::nonNull)
-                .map(new ItemRowMapper())
-                .toList();
-
-        return ResponseEntity.ok(new CleansedItemsResponse(rows));
     }
 
     @Operation(
@@ -300,7 +261,7 @@ public class DataExtractionController {
 
         if ("NO_CONTENT_EXTRACTED".equalsIgnoreCase(currentStatus) || "PROCESSED_EMPTY_ITEMS".equalsIgnoreCase(currentStatus)) {
             logger.info("Processing for {} completed with status: {}. No content for enrichment. CleansedDataID: {}", identifierForLog, currentStatus, cleansedDataStoreId);
-            return buildJsonResponse(HttpStatus.OK, cleansedDataEntry, currentStatus,
+            return buildJsonResponse(HttpStatus.OK, cleansedDataStoreId, currentStatus,
                     "Source processed. No content extracted for enrichment.");
         }
 
@@ -312,7 +273,7 @@ public class DataExtractionController {
         }
 
         logger.info("Cleansing complete for identifier: {}. CleansedDataStore ID: {} is awaiting enrichment trigger.", identifierForLog, cleansedDataStoreId);
-        return buildJsonResponse(HttpStatus.ACCEPTED, cleansedDataEntry, currentStatus,
+        return buildJsonResponse(HttpStatus.ACCEPTED, cleansedDataStoreId, currentStatus,
                 "Cleansing finished. Use POST /api/enrichment/start/" + cleansedDataStoreId + " to trigger enrichment.");
     }
 
@@ -333,18 +294,10 @@ public class DataExtractionController {
                 .body("Enrichment started for CleansedDataStore " + cleansedDataStoreId + ". Triggered by " + triggerSource + ".");
     }
 
-    private ResponseEntity<String> buildJsonResponse(HttpStatus status, CleansedDataStore cleansedDataEntry, String pipelineStatus, String message) {
+    private ResponseEntity<String> buildJsonResponse(HttpStatus status, UUID cleansedDataStoreId, String pipelineStatus, String message) {
         ObjectNode node = objectMapper.createObjectNode();
-        if (cleansedDataEntry != null) {
-            if (cleansedDataEntry.getId() != null) {
-                node.put("cleansedDataStoreId", cleansedDataEntry.getId().toString());
-            }
-            if (cleansedDataEntry.getCleansedItems() != null) {
-                node.set("cleansedItems", objectMapper.valueToTree(cleansedDataEntry.getCleansedItems()));
-            }
-            if (cleansedDataEntry.getCleansingErrors() != null && !cleansedDataEntry.getCleansingErrors().isEmpty()) {
-                node.set("cleansingErrors", objectMapper.valueToTree(cleansedDataEntry.getCleansingErrors()));
-            }
+        if (cleansedDataStoreId != null) {
+            node.put("cleansedDataStoreId", cleansedDataStoreId.toString());
         }
         if (pipelineStatus != null) {
             node.put("status", normalizeStatus(pipelineStatus));
@@ -363,201 +316,5 @@ public class DataExtractionController {
             return "ENRICHMENT COMPLETE";
         }
         return status;
-    }
-
-    private CleansedContextMetadata buildContextMetadata(CleansedDataStore store) {
-        RawDataStore raw = null;
-        if (store.getRawDataId() != null) {
-            raw = rawDataStoreRepository.findById(store.getRawDataId()).orElse(null);
-        }
-
-        String sourceUri = store.getSourceUri();
-        String fileName = deriveFileName(sourceUri);
-        String sourceType = inferSourceType(sourceUri);
-        String sourceLabel = describeSourceLabel(sourceType);
-        String sourceIdentifier = deriveSourceIdentifier(sourceUri);
-
-        long sizeInBytes = 0;
-        OffsetDateTime uploadedAt = store.getCleansedAt();
-        if (raw != null) {
-            if (raw.getRawContentBinary() != null) {
-                sizeInBytes = raw.getRawContentBinary().length;
-            } else if (raw.getRawContentText() != null) {
-                sizeInBytes = raw.getRawContentText().length();
-            }
-            if (raw.getReceivedAt() != null) {
-                uploadedAt = raw.getReceivedAt();
-            }
-        }
-
-        return new CleansedContextMetadata(
-                store.getRawDataId(),
-                sourceUri,
-                sourceLabel,
-                fileName,
-                sizeInBytes,
-                uploadedAt,
-                sourceType,
-                sourceIdentifier
-        );
-    }
-
-    private String deriveFileName(String sourceUri) {
-        if (sourceUri == null || sourceUri.isBlank()) {
-            return "Unknown dataset";
-        }
-        String normalized = sourceUri.replace("\\", "/");
-        int lastSlash = normalized.lastIndexOf('/');
-        if (lastSlash >= 0 && lastSlash < normalized.length() - 1) {
-            return normalized.substring(lastSlash + 1);
-        }
-        return normalized;
-    }
-
-    private String deriveSourceIdentifier(String sourceUri) {
-        if (sourceUri == null) {
-            return "unknown";
-        }
-        return sourceUri.trim();
-    }
-
-    private String inferSourceType(String sourceUri) {
-        if (sourceUri == null) {
-            return "unknown";
-        }
-        String lower = sourceUri.toLowerCase(Locale.ROOT);
-        if (lower.startsWith("s3://")) {
-            return "s3";
-        }
-        if (lower.startsWith("classpath:")) {
-            return "classpath";
-        }
-        if (lower.startsWith("file-upload:") || lower.startsWith("local:")) {
-            return "file";
-        }
-        if (lower.startsWith("api-payload")) {
-            return "api";
-        }
-        return "unknown";
-    }
-
-    private String describeSourceLabel(String type) {
-        return switch (type) {
-            case "s3" -> "S3 source";
-            case "classpath" -> "Classpath resource";
-            case "file" -> "Local upload";
-            case "api" -> "API payload";
-            default -> "Unknown source";
-        };
-    }
-
-    private class ItemRowMapper implements java.util.function.Function<Map<String, Object>, CleansedItemRow> {
-
-        private final List<String> FIELD_KEYS = List.of(
-                "originalFieldName",
-                "fieldName",
-                "field",
-                "label",
-                "key",
-                "itemType",
-                "name"
-        );
-
-        private final List<String> ORIGINAL_KEYS = List.of(
-                "originalValue",
-                "rawValue",
-                "sourceValue",
-                "before",
-                "input",
-                "valueBefore",
-                "value",
-                "copy",
-                "text",
-                "content"
-        );
-
-        private final List<String> CLEANSED_KEYS = List.of(
-                "cleansedValue",
-                "cleanedValue",
-                "normalizedValue",
-                "after",
-                "output",
-                "valueAfter",
-                "value",
-                "cleansedContent",
-                "cleansedCopy",
-                "text"
-        );
-
-        @Override
-        public CleansedItemRow apply(Map<String, Object> item) {
-            String field = findString(item, FIELD_KEYS);
-            if (field == null || field.isBlank()) {
-                field = "Field";
-            }
-            String finalField = field;
-            String itemId = Optional.ofNullable(item.get("id"))
-                    .map(Object::toString)
-                    .orElseGet(() -> finalField + "-" + UUID.randomUUID());
-
-            String original = findValueAcrossSources(item, ORIGINAL_KEYS, field);
-            String cleansed = findValueAcrossSources(item, CLEANSED_KEYS, field);
-
-            return new CleansedItemRow(
-                    itemId,
-                    field,
-                    original,
-                    cleansed
-            );
-        }
-
-        private String findValueAcrossSources(Map<String, Object> item, List<String> keys, String forbiddenValue) {
-            String direct = findString(item, keys, forbiddenValue);
-            if (direct != null) {
-                return direct;
-            }
-            Object contextObj = item.get("context");
-            if (contextObj instanceof Map<?, ?> context) {
-                @SuppressWarnings("unchecked")
-                Map<String, Object> contextMap = (Map<String, Object>) context;
-                String fromContext = findString(contextMap, keys, forbiddenValue);
-                if (fromContext != null) {
-                    return fromContext;
-                }
-                Object facetsObj = contextMap.get("facets");
-                if (facetsObj instanceof Map<?, ?> facets) {
-                    @SuppressWarnings("unchecked")
-                    Map<String, Object> facetsMap = (Map<String, Object>) facets;
-                    String fromFacets = findString(facetsMap, keys, forbiddenValue);
-                    if (fromFacets != null) {
-                        return fromFacets;
-                    }
-                }
-            }
-            Object facetsObj = item.get("facets");
-            if (facetsObj instanceof Map<?, ?> facets) {
-                @SuppressWarnings("unchecked")
-                Map<String, Object> facetsMap = (Map<String, Object>) facets;
-                return findString(facetsMap, keys, forbiddenValue);
-            }
-            return null;
-        }
-
-        private String findString(Map<String, Object> source, List<String> keys) {
-            return findString(source, keys, null);
-        }
-
-        private String findString(Map<String, Object> source, List<String> keys, String forbiddenValue) {
-            for (String key : keys) {
-                if (key == null) continue;
-                Object candidate = source.get(key);
-                if (candidate instanceof String str && !str.isBlank()) {
-                    if (forbiddenValue == null || !str.trim().equalsIgnoreCase(forbiddenValue.trim())) {
-                        return str;
-                    }
-                }
-            }
-            return null;
-        }
     }
 }
