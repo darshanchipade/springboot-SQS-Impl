@@ -1,5 +1,7 @@
 package com.apple.springboot.controller;
 
+import com.apple.springboot.dto.CleansedItemRow;
+import com.apple.springboot.dto.CleansedItemsResponse;
 import com.apple.springboot.model.CleansedDataStore;
 import com.apple.springboot.repository.CleansedDataStoreRepository;
 import com.apple.springboot.service.DataIngestionService;
@@ -24,9 +26,8 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.util.Arrays;
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
+import java.util.function.Function;
 
 @RestController
 @RequestMapping("/api")
@@ -195,6 +196,107 @@ public class DataExtractionController {
     }
 
     @Operation(
+            summary = "Get cleansed items (original vs cleansed values)",
+            description = "Returns normalized rows containing field name, original value, and cleansed value."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Items retrieved successfully"),
+            @ApiResponse(responseCode = "404", description = "Cleansed data record not found")
+    })
+    @GetMapping("/cleansed-items/{id}")
+    public ResponseEntity<?> getCleansedItems(
+            @Parameter(description = "UUID of the cleansed data entry", required = true)
+            @PathVariable UUID id) {
+
+        Optional<CleansedDataStore> storeOpt = cleansedDataStoreRepository.findById(id);
+        if (storeOpt.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("error", "CleansedDataStore not found for id " + id));
+        }
+
+        CleansedDataStore store = storeOpt.get();
+        List<CleansedItemRow> rows = Optional.ofNullable(store.getCleansedItems())
+                .orElse(List.of())
+                .stream()
+                .filter(Objects::nonNull)
+                .map(new ItemRowMapper())
+                .toList();
+
+        return ResponseEntity.ok(new CleansedItemsResponse(rows));
+    }
+
+    private static class ItemRowMapper implements Function<Map<String, Object>, CleansedItemRow> {
+        @Override
+        public CleansedItemRow apply(Map<String, Object> item) {
+            CleansedItemRow row = new CleansedItemRow();
+            String field = pickString(item.get("originalFieldName"));
+            if (field == null) {
+                field = pickString(item.get("itemType"));
+            }
+            if (field == null) {
+                field = "Unknown field";
+            }
+            row.setField(field);
+
+            row.setOriginal(pickString(item.get("originalValue")));
+
+            String cleansed = pickString(item.get("cleansedValue"));
+            if (cleansed == null) {
+                cleansed = pickString(item.get("cleansedContent"));
+            }
+            row.setCleansed(cleansed);
+            return row;
+        }
+
+        private String pickField(Map<String, Object> item) {
+            Object field = item.get("field");
+            if (field instanceof String && !((String) field).isBlank()) {
+                return (String) field;
+            }
+            Object itemType = item.get("itemType");
+            if (itemType instanceof String) return (String) itemType;
+            return "Unknown field";
+        }
+
+        private String pickString(Object value) {
+            return value instanceof String ? (String) value : null;
+        }
+    }
+
+    @Operation(
+            summary = "Resume ingestion from an existing cleansed record",
+            description = "Replays the cleansing pipeline for an existing CleansedDataStore entry using the "
+                    + "original stored payload, allowing downstream steps to continue without re-uploading JSON."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "202", description = "Resume request accepted"),
+            @ApiResponse(responseCode = "404", description = "Cleansed record not found"),
+            @ApiResponse(responseCode = "409", description = "Cleansed record cannot be replayed"),
+            @ApiResponse(responseCode = "500", description = "Internal server error")
+    })
+    @PostMapping("/ingestion/resume/{id}")
+    public ResponseEntity<String> resumeIngestionFromSnapshot(
+            @Parameter(description = "UUID of the cleansed data entry to replay", required = true)
+            @PathVariable("id") UUID cleansedDataStoreId) {
+        logger.info("Received request to resume ingestion pipeline for CleansedDataStore {}", cleansedDataStoreId);
+        try {
+            CleansedDataStore cleansedDataEntry = dataIngestionService.resumeFromExistingCleansedId(cleansedDataStoreId);
+            return handleCleansingOutcome(cleansedDataEntry, "resume-" + cleansedDataStoreId);
+        } catch (IllegalArgumentException e) {
+            logger.warn("Unable to resume ingestion for {}: {}", cleansedDataStoreId, e.getMessage());
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body("CleansedDataStore not found for id " + cleansedDataStoreId);
+        } catch (IllegalStateException e) {
+            logger.error("CleansedDataStore {} cannot be resumed: {}", cleansedDataStoreId, e.getMessage());
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body("Cannot resume cleansed record " + cleansedDataStoreId + ": " + e.getMessage());
+        } catch (Exception e) {
+            logger.error("Unexpected error while resuming CleansedDataStore {}: {}", cleansedDataStoreId, e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Error resuming cleansed record " + cleansedDataStoreId + ": " + e.getMessage());
+        }
+    }
+    @Operation(
             summary = "Fetch enrichment result",
             description = "Returns enriched content elements and metrics for the provided cleansed data ID.")
     @ApiResponses(value = {
@@ -211,6 +313,7 @@ public class DataExtractionController {
                 .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND)
                         .body("Enrichment result not found for id " + id));
     }
+
 
     @Operation(
             summary = "Trigger enrichment for an existing cleansed data record",

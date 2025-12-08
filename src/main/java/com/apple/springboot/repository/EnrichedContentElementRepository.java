@@ -24,6 +24,6 @@ public interface EnrichedContentElementRepository extends JpaRepository<Enriched
      * This is the correct method signature.
      */
     Optional<EnrichedContentElement> findByCleansedDataIdAndItemSourcePathAndItemOriginalFieldName(UUID cleansedDataId, String sourcePath, String fieldName);
-    List<EnrichedContentElement> findByCleansedDataId(UUID cleansedDataId);
+    List<EnrichedContentElement> findByCleansedDataIdOrderByEnrichedAtAsc(UUID cleansedDataId);
 
 }

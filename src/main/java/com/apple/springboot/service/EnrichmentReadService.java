@@ -43,7 +43,7 @@ public class EnrichmentReadService {
 
     public Optional<EnrichmentResultResponse> loadEnrichmentResult(UUID cleansedId) {
         List<EnrichedContentElement> elements = enrichedContentElementRepository
-                .findByCleansedDataId(cleansedId);
+                .findByCleansedDataIdOrderByEnrichedAtAsc(cleansedId);
         if (elements.isEmpty()) {
             return Optional.empty();
         }
