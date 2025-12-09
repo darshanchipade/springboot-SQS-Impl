@@ -8,6 +8,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.micrometer.common.lang.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -326,7 +327,7 @@ public class DataIngestionService {
         return processLoadedContent(rawJsonContent, savedRawDataStore);
     }
     @Transactional
-    public CleansedDataStore ingestAndCleanseJsonPayload(String jsonPayload, String sourceIdentifier) {
+    public CleansedDataStore ingestAndCleanseJsonPayload(String jsonPayload, String sourceIdentifier) throws JsonProcessingException {
         RawDataStore rawDataStore = findOrCreateRawDataStore(jsonPayload, sourceIdentifier);
         if (rawDataStore == null) {
             return null;
@@ -344,7 +345,7 @@ public class DataIngestionService {
      * @return the refreshed CleansedDataStore entry after reprocessing.
      */
     @Transactional
-    public CleansedDataStore resumeFromExistingCleansedId(UUID cleansedDataStoreId) {
+    public CleansedDataStore resumeFromExistingCleansedId(UUID cleansedDataStoreId) throws JsonProcessingException {
         if (cleansedDataStoreId == null) {
             throw new IllegalArgumentException("CleansedDataStore id must be provided to resume processing.");
         }
@@ -370,9 +371,23 @@ public class DataIngestionService {
         }
 
         logger.info("Resuming ingestion pipeline for CleansedDataStore {} using RawDataStore {}", cleansedDataStoreId, rawDataId);
-        return processLoadedContent(rawJsonContent, rawDataStore);
+        //return processLoadedContent(rawJsonContent, rawDataStore);
+        return processLoadedContent(rawJsonContent, rawDataStore, existingCleansed);
     }
 
+    private CleansedDataStore refreshExistingCleansedRecord(
+            CleansedDataStore existing,
+            List<Map<String, Object>> items,
+            RawDataStore rawData) {
+
+        existing.setCleansedItems(items);
+        existing.setCleansedAt(OffsetDateTime.now());
+        existing.setStatus("CLEANSED_PENDING_ENRICHMENT");
+        existing.setVersion(rawData.getVersion());
+        rawData.setStatus("CLEANSING_COMPLETE");
+        rawDataStoreRepository.save(rawData);
+        return cleansedDataStoreRepository.save(existing);
+    }
     private RawDataStore findOrCreateRawDataStore(String jsonPayload, String sourceIdentifier) {
         if (jsonPayload == null || jsonPayload.trim().isEmpty()) {
             throw new IllegalArgumentException("JSON payload cannot be null or empty for sourceIdentifier " + sourceIdentifier);
@@ -469,26 +484,35 @@ public class DataIngestionService {
         }
     }
 
-    private CleansedDataStore processLoadedContent(String rawJsonContent, RawDataStore associatedRawDataStore) {
+    private CleansedDataStore processLoadedContent(String rawJsonContent,
+                                                   RawDataStore rawDataStore) throws JsonProcessingException {
+        return processLoadedContent(rawJsonContent, rawDataStore, null);
+    }
+
+    private CleansedDataStore processLoadedContent(String rawJsonContent,
+                                                   RawDataStore rawDataStore,
+                                                   @Nullable CleansedDataStore existingCleansed) throws JsonProcessingException {
         try {
             JsonNode rootNode = objectMapper.readTree(rawJsonContent);
             List<Map<String, Object>> allExtractedItems = new ArrayList<>();
-
             Envelope rootEnvelope = new Envelope();
-            rootEnvelope.setSourcePath(associatedRawDataStore.getSourceUri());
-            rootEnvelope.setUsagePath(associatedRawDataStore.getSourceUri());
+            rootEnvelope.setSourcePath(rawDataStore.getSourceUri());
+            rootEnvelope.setUsagePath(rawDataStore.getSourceUri());
             rootEnvelope.setProvenance(new HashMap<>());
 
             IngestionCounters counters = new IngestionCounters();
             findAndExtractRecursive(rootNode, "#", rootEnvelope, new Facets(), allExtractedItems, counters);
 
-            List<Map<String, Object>> itemsToProcess = returnAllItems ? allExtractedItems : filterForChangedItems(allExtractedItems);
+            List<Map<String, Object>> itemsToProcess =
+                    returnAllItems ? allExtractedItems : filterForChangedItems(allExtractedItems);
 
             if (debugCountersEnabled) {
                 long keptPreFilterCopy = counters.copyKept;
                 long keptPreFilterAnalytics = counters.analyticsKept;
-                long keptPostFilterCopy = itemsToProcess.stream().filter(i -> !isAnalyticsItem(i)).count();
-                long keptPostFilterAnalytics = itemsToProcess.stream().filter(this::isAnalyticsItem).count();
+                long keptPostFilterCopy =
+                        itemsToProcess.stream().filter(i -> !isAnalyticsItem(i)).count();
+                long keptPostFilterAnalytics =
+                        itemsToProcess.stream().filter(this::isAnalyticsItem).count();
                 logger.info("Counters: copy found={}, kept(after-cleanse)={}, kept(after-filter)={}; analytics found={}, kept(after-cleanse)={}, kept(after-filter)={}; blank-kept(copy)={}, blank-kept(analytics)={}",
                         counters.copyFound, keptPreFilterCopy, keptPostFilterCopy,
                         counters.analyticsFound, keptPreFilterAnalytics, keptPostFilterAnalytics,
@@ -496,19 +520,27 @@ public class DataIngestionService {
             }
 
             if (itemsToProcess.isEmpty()) {
-                logger.info("No new or updated content to process for raw_data_id: {}", associatedRawDataStore.getId());
-                associatedRawDataStore.setStatus("PROCESSED_NO_CHANGES");
-                rawDataStoreRepository.save(associatedRawDataStore);
-                return cleansedDataStoreRepository.findTopByRawDataIdOrderByCleansedAtDesc(associatedRawDataStore.getId()).orElse(null);
+                logger.info("No new or updated content to process for raw_data_id: {}", rawDataStore.getId());
+                rawDataStore.setStatus("PROCESSED_NO_CHANGES");
+                rawDataStoreRepository.save(rawDataStore);
+                return existingCleansed != null
+                        ? existingCleansed
+                        : cleansedDataStoreRepository
+                        .findTopByRawDataIdOrderByCleansedAtDesc(rawDataStore.getId())
+                        .orElse(null);
             }
 
-            return createCleansedDataStore(itemsToProcess, associatedRawDataStore);
-
+            return existingCleansed != null
+                    ? refreshExistingCleansedRecord(existingCleansed, itemsToProcess, rawDataStore)
+                    : createCleansedDataStore(itemsToProcess, rawDataStore);
         } catch (Exception e) {
-            logger.error("Error during content processing for raw data ID: {}. Error: {}", associatedRawDataStore.getId(), e.getMessage(), e);
-            associatedRawDataStore.setStatus("EXTRACTION_ERROR");
-            rawDataStoreRepository.save(associatedRawDataStore);
-            return createAndSaveErrorCleansedDataStore(associatedRawDataStore, "EXTRACTION_FAILED", "ExtractionError: " + e.getMessage(),"Failed");
+            rawDataStore.setStatus("EXTRACTION_ERROR");
+            rawDataStoreRepository.save(rawDataStore);
+            if (existingCleansed != null) {
+                throw e;
+            }
+            return createAndSaveErrorCleansedDataStore(
+                    rawDataStore, "EXTRACTION_FAILED", "ExtractionError: " + e.getMessage(), "Failed");
         }
     }
 
