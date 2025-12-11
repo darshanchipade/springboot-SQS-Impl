@@ -24,5 +24,4 @@ COPY src/main/resources/certs /app/certs
 
 EXPOSE 8080
 
-# Allow Render JAVA_OPTS to be injected at runtime
-ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]
+ENTRYPOINT ["java", "-jar", "app.jar"]
