@@ -19,6 +19,9 @@ WORKDIR /app
 # Copy built JAR from the build stage
 COPY --from=build /app/target/*.jar app.jar
 
+# Copy certs to /app/certs
+COPY src/main/resources/certs /app/certs
+
 EXPOSE 8080
 
 ENTRYPOINT ["java", "-jar", "app.jar"]
