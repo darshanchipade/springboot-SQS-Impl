@@ -14,7 +14,7 @@ public class WebConfig {
             @Override
             public void addCorsMappings(CorsRegistry registry) {
                 registry.addMapping("/**")
-                        .allowedOrigins("https://user-flow-coral.vercel.app")
+                        .allowedOrigins("https://user-flow-delta.vercel.app/")
                         .allowedMethods("*")
                         .allowedHeaders("*");
             }
