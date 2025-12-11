@@ -68,7 +68,11 @@ public class DataExtractionController {
         this.cleansedDataStoreRepository = cleansedDataStoreRepository;
         this.objectMapper = objectMapper;
     }
+    @GetMapping("/hello")
+    public String extractCleanseEnrichAndStore(){
 
+        return "Hello there";
+    }
     @Operation(
             summary = "Extract, cleanse, enrich and store data from an uploaded JSON file",
             description = "Uploads a JSON file, cleanses it, and triggers enrichment. " +
