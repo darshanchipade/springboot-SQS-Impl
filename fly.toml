@@ -1,4 +1,4 @@
-app = "UserFlowSpringBoot"
+app = "userflowspringboot"
 primary_region = "sjc"
 
 kill_signal = "SIGINT"
