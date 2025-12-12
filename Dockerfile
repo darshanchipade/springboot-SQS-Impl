@@ -23,5 +23,6 @@ COPY --from=build /app/target/*.jar app.jar
 COPY src/main/resources/certs /app/certs
 
 EXPOSE 8080
-#Test
-ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]
+#Test ENTRYPOINT ["java", "-jar", "app.jar"]
+#ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar app.jar"]
