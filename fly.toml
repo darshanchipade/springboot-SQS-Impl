@@ -1,0 +1,46 @@
+app = "UserFlowSpringBoot"
+primary_region = "sjc"
+
+kill_signal = "SIGINT"
+kill_timeout = 5
+
+[build]
+dockerfile = "Dockerfile"
+
+[env]
+JAVA_OPTS = "-Xms512m -Xmx1024m"
+SERVER_PORT = "8080"
+
+# Spring Boot Datasource (YugabyteDB)
+SPRING_DATASOURCE_URL = jdbc:postgresql://us-east-1.87570475-5fdd-4a0e-9a8f-b12e92b791c8.aws.yugabyte.cloud:5433/bedrock_enriched_content_db?sslmode=require&sslrootcert=/Users/darshanchipade/Documents/GitHub/springboot-SQS-Impl/src/main/resources/certs/root.crt
+SPRING_DATASOURCE_USERNAME = admin
+SPRING_DATASOURCE_PASSWORD = L7OIjJInEw94bcCxklWPY3SOQXiTdt
+
+# AWS Credentials (must be set using fly secrets)
+AWS_REGION = "us-east-2"
+AWS_S3_REGION = "us-east-2"
+
+# Bedrock / Titan
+AWS_BEDROCK_REGION = "us-east-2"
+BEDROCK_MODEL_ID = "us.anthropic.claude-3-haiku-20240307-v1:0"
+BEDROCK_EMBEDDING_MODEL_ID = "amazon.titan-embed-text-v2:0"
+
+[http_service]
+internal_port = 8080
+force_https = true
+auto_stop_machines = false
+auto_start_machines = true
+min_machines_running = 1
+
+[[http_service.ports]]
+port = 80
+handlers = ["http"]
+
+[[http_service.ports]]
+port = 443
+handlers = ["tls", "http"]
+
+[http_service.concurrency]
+type = "requests"
+soft_limit = 20
+hard_limit = 40
