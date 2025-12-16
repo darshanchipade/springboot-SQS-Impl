@@ -71,7 +71,7 @@ public class DataIngestionService {
     private boolean keepBlankAfterCleanse;
 
     // If true, bypass change filter and return all extracted items
-    @Value("${app.ingestion.return-all-items:false}")
+    @Value("${app.ingestion.return-all-items:true}")
     private boolean returnAllItems;
 
     // If true, include contextHash in change detection
