@@ -31,6 +31,20 @@ public class ContentHash {
     @Column(name = "context_hash", columnDefinition = "TEXT")
     private String contextHash;
 
+    /**
+     * Hash of the original (pre-cleansing) extracted value. Used to detect deltas
+     * without having to re-run cleansing for every item on subsequent uploads.
+     */
+    @Column(name = "raw_content_hash", columnDefinition = "TEXT")
+    private String rawContentHash;
+
+    /**
+     * Hash of a "context fingerprint" that excludes cleansing-derived fields.
+     * This supports context-change detection (when enabled) without forcing full re-cleansing.
+     */
+    @Column(name = "context_fingerprint_hash", columnDefinition = "TEXT")
+    private String contextFingerprintHash;
+
     public ContentHash() {
     }
 

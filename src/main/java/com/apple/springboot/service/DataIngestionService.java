@@ -95,6 +95,51 @@ public class DataIngestionService {
     private static final Pattern NESTED_URL_PATTERN = Pattern.compile(":\\[\\s*:\\[[^\\]]+\\]\\(\\{%url metadata=\"\\d+\" destination-type=\"[^\"]+\"%\\}\\)\\]\\(\\{%wj%\\}\\)");
     private static final Pattern METADATA_PATTERN = Pattern.compile("\\{% metadata=\"\\d+\" %\\}");
 
+    /**
+     * Internal representation of an extracted content candidate before cleansing.
+     * We intentionally defer cleansing so that on "delta" uploads we only cleanse the changed items.
+     */
+    private static class CandidateItem {
+        final String sourcePath;
+        final String itemType;
+        final String usagePath;
+        final String originalFieldName;
+        final String model;
+        final boolean skipEnrichment;
+        final String originalValue;
+        final String rawContentHash;
+        final String contextFingerprintHash;
+        final Envelope envelope;
+        final Facets facets;
+        final boolean isAnalytics;
+
+        CandidateItem(String sourcePath,
+                      String itemType,
+                      String usagePath,
+                      String originalFieldName,
+                      String model,
+                      boolean skipEnrichment,
+                      String originalValue,
+                      String rawContentHash,
+                      String contextFingerprintHash,
+                      Envelope envelope,
+                      Facets facets,
+                      boolean isAnalytics) {
+            this.sourcePath = sourcePath;
+            this.itemType = itemType;
+            this.usagePath = usagePath;
+            this.originalFieldName = originalFieldName;
+            this.model = model;
+            this.skipEnrichment = skipEnrichment;
+            this.originalValue = originalValue;
+            this.rawContentHash = rawContentHash;
+            this.contextFingerprintHash = contextFingerprintHash;
+            this.envelope = envelope;
+            this.facets = facets;
+            this.isAnalytics = isAnalytics;
+        }
+    }
+
 
     /**
      * Constructs the service with required repositories and config values.
@@ -494,7 +539,7 @@ public class DataIngestionService {
                                                    @Nullable CleansedDataStore existingCleansed) throws JsonProcessingException {
         try {
             JsonNode rootNode = objectMapper.readTree(rawJsonContent);
-            List<Map<String, Object>> allExtractedItems = new ArrayList<>();
+            List<CandidateItem> allExtractedItems = new ArrayList<>();
             Envelope rootEnvelope = new Envelope();
             rootEnvelope.setSourcePath(rawDataStore.getSourceUri());
             rootEnvelope.setUsagePath(rawDataStore.getSourceUri());
@@ -504,7 +549,7 @@ public class DataIngestionService {
             findAndExtractRecursive(rootNode, "#", rootEnvelope, new Facets(), allExtractedItems, counters);
 
             List<Map<String, Object>> itemsToProcess =
-                    returnAllItems ? allExtractedItems : filterForChangedItems(allExtractedItems);
+                    returnAllItems ? finalizeAllItems(allExtractedItems, counters) : filterForChangedItems(allExtractedItems, counters);
 
             if (debugCountersEnabled) {
                 long keptPreFilterCopy = counters.copyKept;
@@ -544,41 +589,87 @@ public class DataIngestionService {
         }
     }
 
-    private List<Map<String, Object>> filterForChangedItems(List<Map<String, Object>> allItems) {
-        List<Map<String, Object>> changedItems = new ArrayList<>();
-        for (Map<String, Object> item : allItems) {
-            String sourcePath = (String) item.get("sourcePath");
-            String itemType = (String) item.get("itemType");
-            String usagePath = (String) item.get("usagePath");
-            String newContentHash = (String) item.get("contentHash");
-            String newContextHash = (String) item.get("contextHash");
+    private List<Map<String, Object>> finalizeAllItems(List<CandidateItem> candidates, IngestionCounters counters) {
+        List<Map<String, Object>> finalized = new ArrayList<>();
+        for (CandidateItem candidate : candidates) {
+            Map<String, Object> item = finalizeCandidate(candidate, counters);
+            if (item == null) continue;
+            finalized.add(item);
+            upsertHashes(candidate, item, true);
+        }
+        return finalized;
+    }
 
-            if (sourcePath == null || itemType == null) continue;
+    private List<Map<String, Object>> filterForChangedItems(List<CandidateItem> candidates, IngestionCounters counters) {
+        List<Map<String, Object>> changedItems = new ArrayList<>();
+        for (CandidateItem candidate : candidates) {
+            if (candidate.sourcePath == null || candidate.itemType == null) continue;
 
             Optional<ContentHash> existingHashOpt =
-                    contentHashRepository.findBySourcePathAndItemTypeAndUsagePath(sourcePath, itemType, usagePath);
+                    contentHashRepository.findBySourcePathAndItemTypeAndUsagePath(candidate.sourcePath, candidate.itemType, candidate.usagePath);
             if (existingHashOpt.isEmpty() && !strictUsagePath) {
-                existingHashOpt = contentHashRepository.findBySourcePathAndItemType(sourcePath, itemType);
+                existingHashOpt = contentHashRepository.findBySourcePathAndItemType(candidate.sourcePath, candidate.itemType);
                 if (existingHashOpt.isPresent()) {
-                    logger.debug("Change detection fallback matched by (sourcePath,itemType) without usagePath for {} :: {}", sourcePath, itemType);
+                    logger.debug("Change detection fallback matched by (sourcePath,itemType) without usagePath for {} :: {}", candidate.sourcePath, candidate.itemType);
                 }
             }
 
-            boolean contentChanged = existingHashOpt.isEmpty()
-                    || !Objects.equals(existingHashOpt.get().getContentHash(), newContentHash);
-            boolean contextChanged = considerContextChange && (existingHashOpt.isEmpty()
-                    || !Objects.equals(existingHashOpt.get().getContextHash(), newContextHash));
+            boolean rawChanged = existingHashOpt.isEmpty()
+                    || existingHashOpt.get().getRawContentHash() == null
+                    || !Objects.equals(existingHashOpt.get().getRawContentHash(), candidate.rawContentHash);
 
-            if (existingHashOpt.isEmpty() || contentChanged || contextChanged) {
-                changedItems.add(item);
+            boolean contextFingerprintChanged = considerContextChange && (existingHashOpt.isEmpty()
+                    || existingHashOpt.get().getContextFingerprintHash() == null
+                    || !Objects.equals(existingHashOpt.get().getContextFingerprintHash(), candidate.contextFingerprintHash));
+
+            // If we can't safely decide (e.g., legacy rows without raw hashes), we treat as changed.
+            boolean shouldProcess = rawChanged || contextFingerprintChanged;
+
+            if (shouldProcess) {
+                Map<String, Object> finalized = finalizeCandidate(candidate, counters);
+                if (finalized != null) {
+                    changedItems.add(finalized);
+                    upsertHashes(candidate, finalized, true);
+                } else {
+                    // Still store raw hashes so next run can skip cleansing.
+                    upsertHashes(candidate, null, false);
+                }
+            } else {
+                // Unchanged: persist raw/context fingerprints (if missing) without re-cleansing.
+                upsertHashes(candidate, null, false);
             }
-            // Always persist latest observed hashes for this key
-            ContentHash hashToSave = existingHashOpt.orElse(new ContentHash(sourcePath, itemType, usagePath, null, null));
-            hashToSave.setContentHash(newContentHash);
-            hashToSave.setContextHash(newContextHash);
-            contentHashRepository.save(hashToSave);
         }
         return changedItems;
+    }
+
+    private void upsertHashes(CandidateItem candidate, @Nullable Map<String, Object> finalizedItem, boolean overwriteCleansedHashes) {
+        Optional<ContentHash> existingHashOpt =
+                contentHashRepository.findBySourcePathAndItemTypeAndUsagePath(candidate.sourcePath, candidate.itemType, candidate.usagePath);
+        if (existingHashOpt.isEmpty() && !strictUsagePath) {
+            existingHashOpt = contentHashRepository.findBySourcePathAndItemType(candidate.sourcePath, candidate.itemType);
+        }
+
+        ContentHash hashToSave = existingHashOpt.orElse(new ContentHash(candidate.sourcePath, candidate.itemType, candidate.usagePath, "", null));
+
+        // Always refresh raw + context fingerprint hashes
+        hashToSave.setRawContentHash(candidate.rawContentHash);
+        hashToSave.setContextFingerprintHash(candidate.contextFingerprintHash);
+
+        if (finalizedItem != null && overwriteCleansedHashes) {
+            String newContentHash = (String) finalizedItem.get("contentHash");
+            String newContextHash = (String) finalizedItem.get("contextHash");
+            if (newContentHash != null) {
+                hashToSave.setContentHash(newContentHash);
+            }
+            hashToSave.setContextHash(newContextHash);
+        }
+
+        // contentHash column is non-nullable; if we created a new row without cleansing, ensure a value.
+        if (hashToSave.getContentHash() == null || hashToSave.getContentHash().isBlank()) {
+            // Prefer existing content hash if present; otherwise fall back to raw hash.
+            hashToSave.setContentHash(existingHashOpt.map(ContentHash::getContentHash).orElse(candidate.rawContentHash));
+        }
+        contentHashRepository.save(hashToSave);
     }
 
     private CleansedDataStore createCleansedDataStore(List<Map<String, Object>> items, RawDataStore rawData) {
@@ -594,7 +685,7 @@ public class DataIngestionService {
         return cleansedDataStoreRepository.save(cleansedDataStore);
     }
 
-    private void findAndExtractRecursive(JsonNode currentNode, String parentFieldName, Envelope parentEnvelope, Facets parentFacets, List<Map<String, Object>> results, IngestionCounters counters) {
+    private void findAndExtractRecursive(JsonNode currentNode, String parentFieldName, Envelope parentEnvelope, Facets parentFacets, List<CandidateItem> results, IngestionCounters counters) {
         if (currentNode.isObject()) {
             Envelope currentEnvelope = buildCurrentEnvelope(currentNode, parentEnvelope);
             Facets currentFacets = buildCurrentFacets(currentNode, parentFacets);
@@ -776,59 +867,51 @@ public class DataIngestionService {
         return currentFacets;
     }
 
-    private void processContentField(String content, String fieldKey, Envelope envelope, Facets facets, List<Map<String, Object>> results, IngestionCounters counters, boolean isAnalytics) {
+    private void processContentField(String content, String fieldKey, Envelope envelope, Facets facets, List<CandidateItem> results, IngestionCounters counters, boolean isAnalytics) {
         boolean skipEnrichment = isExcluded(fieldKey);
-        String cleansedContent = cleanseCopyText(content);
         if (isAnalytics) counters.analyticsFound++; else counters.copyFound++;
+        if (content == null) return;
 
-        boolean isBlankAfterCleanse = cleansedContent == null || cleansedContent.isBlank();
-        boolean keep = cleansedContent != null && (!isBlankAfterCleanse || keepBlankAfterCleanse);
-        if (keep && isBlankAfterCleanse) {
-            if (isAnalytics) counters.analyticsBlankKept++; else counters.copyBlankKept++;
+        Envelope envCopy = copyEnvelope(envelope);
+        Facets facetsCopy = new Facets(facets);
+
+        String rawHash = calculateContentHash(content, null);
+        String contextFingerprintHash = null;
+        try {
+            EnrichmentContext fingerprintContext = new EnrichmentContext(envCopy, facetsCopy);
+            contextFingerprintHash = calculateContentHash(objectMapper.writeValueAsString(fingerprintContext), null);
+        } catch (JsonProcessingException e) {
+            logger.error("Failed to serialize context fingerprint for hashing", e);
         }
 
-        if (keep) {
-            //facets.putAll(facets);
-            facets.put("cleansedCopy", cleansedContent);
+        results.add(new CandidateItem(
+                envCopy.getSourcePath(),
+                fieldKey,
+                envCopy.getUsagePath(),
+                fieldKey,
+                envCopy.getModel(),
+                skipEnrichment,
+                content,
+                rawHash,
+                contextFingerprintHash,
+                envCopy,
+                facetsCopy,
+                isAnalytics
+        ));
+    }
 
-            String lowerCaseContent = cleansedContent.toLowerCase();
-            for (Map.Entry<String, String> entry : EVENT_KEYWORDS.entrySet()) {
-                if (lowerCaseContent.contains(entry.getKey())) {
-                    facets.put("eventType", entry.getValue());
-                    break;
-                }
-            }
-            EnrichmentContext finalContext = new EnrichmentContext(envelope, facets);
-            Map<String, Object> item = new HashMap<>();
-            item.put("sourcePath", envelope.getSourcePath());
-            item.put("itemType", fieldKey);
-            item.put("originalFieldName", fieldKey);
-            item.put("model", envelope.getModel());
-            item.put("usagePath", envelope.getUsagePath());
-            item.put("cleansedContent", cleansedContent);
-            item.put("contentHash", calculateContentHash(cleansedContent, null));
-            item.put("skipEnrichment", skipEnrichment);
-            item.put("originalValue", content);
-            item.put("cleansedValue", cleansedContent);
-            try {
-                item.put("context", objectMapper.convertValue(finalContext, new com.fasterxml.jackson.core.type.TypeReference<>() {}));
-                // Ensure stable property and map ordering when hashing
-                item.put("contextHash", calculateContentHash(objectMapper.writeValueAsString(finalContext), null));
-            } catch (JsonProcessingException e) {
-                logger.error("Failed to process context for hashing", e);
-            }
-            results.add(item);
-            if (isAnalytics) counters.analyticsKept++; else counters.copyKept++;
-        }
+    private boolean isAnalyticsItem(CandidateItem item) {
+        return item != null && item.isAnalytics;
     }
 
     private boolean isAnalyticsItem(Map<String, Object> item) {
-        String type = (String) item.get("itemType");
-        return type != null && type.toLowerCase().contains("analytics");
+        if (item == null) return false;
+        Object type = item.get("itemType");
+        return type instanceof String s && s.toLowerCase().contains("analytics");
     }
 
     private void processAnalyticsNode(JsonNode node, String fieldKey, Envelope env, Facets facets,
-                                      List<Map<String, Object>> results, IngestionCounters counters) {
+                                      List<CandidateItem> results, IngestionCounters counters) {
         if (node == null || node.isNull()) return;
 
         if (node.isTextual() || node.isNumber() || node.isBoolean()) {
@@ -873,6 +956,73 @@ public class DataIngestionService {
                 i++;
             }
         }
+    }
+
+    private @Nullable Map<String, Object> finalizeCandidate(CandidateItem candidate, IngestionCounters counters) {
+        if (candidate == null || candidate.originalValue == null) return null;
+
+        String cleansedContent = cleanseCopyText(candidate.originalValue);
+
+        boolean isBlankAfterCleanse = cleansedContent == null || cleansedContent.isBlank();
+        boolean keep = cleansedContent != null && (!isBlankAfterCleanse || keepBlankAfterCleanse);
+        if (!keep) {
+            return null;
+        }
+        if (keep && isBlankAfterCleanse) {
+            if (candidate.isAnalytics) counters.analyticsBlankKept++; else counters.copyBlankKept++;
+        }
+
+        // Enrichment facets derived from cleansed content should only be computed for items we actually process.
+        Facets facets = new Facets(candidate.facets);
+        facets.put("cleansedCopy", cleansedContent);
+        String lowerCaseContent = cleansedContent.toLowerCase();
+        for (Map.Entry<String, String> entry : EVENT_KEYWORDS.entrySet()) {
+            if (lowerCaseContent.contains(entry.getKey())) {
+                facets.put("eventType", entry.getValue());
+                break;
+            }
+        }
+
+        EnrichmentContext finalContext = new EnrichmentContext(candidate.envelope, facets);
+        Map<String, Object> item = new HashMap<>();
+        item.put("sourcePath", candidate.sourcePath);
+        item.put("itemType", candidate.itemType);
+        item.put("originalFieldName", candidate.originalFieldName);
+        item.put("model", candidate.model);
+        item.put("usagePath", candidate.usagePath);
+        item.put("cleansedContent", cleansedContent);
+        item.put("contentHash", calculateContentHash(cleansedContent, null));
+        item.put("skipEnrichment", candidate.skipEnrichment);
+        item.put("originalValue", candidate.originalValue);
+        item.put("cleansedValue", cleansedContent);
+        try {
+            item.put("context", objectMapper.convertValue(finalContext, new com.fasterxml.jackson.core.type.TypeReference<>() {}));
+            item.put("contextHash", calculateContentHash(objectMapper.writeValueAsString(finalContext), null));
+        } catch (JsonProcessingException e) {
+            logger.error("Failed to process context for hashing", e);
+        }
+
+        if (candidate.isAnalytics) counters.analyticsKept++; else counters.copyKept++;
+        return item;
+    }
+
+    private Envelope copyEnvelope(Envelope src) {
+        if (src == null) return null;
+        Envelope copy = new Envelope();
+        copy.setUsagePath(src.getUsagePath());
+        copy.setSourcePath(src.getSourcePath());
+        copy.setModel(src.getModel());
+        copy.setLocale(src.getLocale());
+        copy.setLanguage(src.getLanguage());
+        copy.setCountry(src.getCountry());
+        copy.setSectionName(src.getSectionName());
+        if (src.getPathHierarchy() != null) {
+            copy.setPathHierarchy(new ArrayList<>(src.getPathHierarchy()));
+        }
+        if (src.getProvenance() != null) {
+            copy.setProvenance(new HashMap<>(src.getProvenance()));
+        }
+        return copy;
     }
 
     private String calculateContentHash(String content, String context) {
