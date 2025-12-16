@@ -94,6 +94,7 @@ public class DataIngestionService {
     // private static final Pattern WJ_PATTERN = Pattern.compile("\\(\\{%wj%\\}\\)");
     private static final Pattern NESTED_URL_PATTERN = Pattern.compile(":\\[\\s*:\\[[^\\]]+\\]\\(\\{%url metadata=\"\\d+\" destination-type=\"[^\"]+\"%\\}\\)\\]\\(\\{%wj%\\}\\)");
     private static final Pattern METADATA_PATTERN = Pattern.compile("\\{% metadata=\"\\d+\" %\\}");
+    private static final String USAGE_JSON_DELIM = " ::json:: ";
 
     /**
      * Internal representation of an extracted content candidate before cleansing.
@@ -566,7 +567,7 @@ public class DataIngestionService {
             rootEnvelope.setProvenance(new HashMap<>());
 
             IngestionCounters counters = new IngestionCounters();
-            findAndExtractRecursive(rootNode, "#", "#", rootEnvelope, new Facets(), allExtractedItems, counters);
+            findAndExtractRecursive(rootNode, "#", "#", toUsageKey(rootEnvelope.getSourcePath(), "#"), rootEnvelope, new Facets(), allExtractedItems, counters);
 
             boolean shouldReturnAll = returnAllOverride != null ? returnAllOverride : returnAllItems;
             List<Map<String, Object>> itemsToProcess =
@@ -709,6 +710,7 @@ public class DataIngestionService {
     private void findAndExtractRecursive(JsonNode currentNode,
                                          String parentFieldName,
                                          String jsonPath,
+                                         String parentUsageKey,
                                          Envelope parentEnvelope,
                                          Facets parentFacets,
                                          List<CandidateItem> results,
@@ -716,6 +718,7 @@ public class DataIngestionService {
         if (currentNode.isObject()) {
             Envelope currentEnvelope = buildCurrentEnvelope(currentNode, parentEnvelope, jsonPath);
             Facets currentFacets = buildCurrentFacets(currentNode, parentFacets);
+            String currentUsageKey = toUsageKey(currentEnvelope.getSourcePath(), jsonPath);
 
             // Section detection logic
             String modelName = currentEnvelope.getModel();
@@ -736,15 +739,13 @@ public class DataIngestionService {
                 String fieldKey = entry.getKey();
                 JsonNode fieldValue = entry.getValue();
                 String childJsonPath = jsonPath + "/" + fieldKey;
-                String fragmentPath = currentEnvelope.getSourcePath();
-                String containerPath = (parentEnvelope != null
-                        && parentEnvelope.getSourcePath() != null
-                        && !parentEnvelope.getSourcePath().equals(fragmentPath))
-                        ? parentEnvelope.getSourcePath()
+                String fragmentUsageKey = currentUsageKey;
+                String containerUsageKey = (parentUsageKey != null && !parentUsageKey.equals(fragmentUsageKey))
+                        ? parentUsageKey
                         : null;
-                String usagePath = (containerPath != null)
-                        ? containerPath + USAGE_REF_DELIM + fragmentPath
-                        : fragmentPath;
+                String usagePath = (containerUsageKey != null)
+                        ? containerUsageKey + USAGE_REF_DELIM + fragmentUsageKey
+                        : fragmentUsageKey;
 
                 if (CONTENT_FIELD_KEYS.contains(fieldKey)) {
                     if (fieldValue.isTextual()) {
@@ -813,13 +814,13 @@ public class DataIngestionService {
                         }
                     } else {
                         currentEnvelope.setUsagePath(usagePath);
-                        findAndExtractRecursive(fieldValue, fieldKey, childJsonPath, currentEnvelope, currentFacets, results, counters);
+                        findAndExtractRecursive(fieldValue, fieldKey, childJsonPath, currentUsageKey, currentEnvelope, currentFacets, results, counters);
                     }
                 } else if (fieldKey.toLowerCase().contains("analytics")) {
                     processAnalyticsNode(fieldValue, fieldKey, childJsonPath, currentEnvelope, currentFacets, results, counters);
                 } else if (fieldValue.isObject() || fieldValue.isArray()) {
                     currentEnvelope.setUsagePath(usagePath);
-                    findAndExtractRecursive(fieldValue, fieldKey, childJsonPath, currentEnvelope, currentFacets, results, counters);
+                    findAndExtractRecursive(fieldValue, fieldKey, childJsonPath, currentUsageKey, currentEnvelope, currentFacets, results, counters);
                 }
             });
         } else if (currentNode.isArray()) {
@@ -830,7 +831,7 @@ public class DataIngestionService {
                 newFacets.putAll(parentFacets);
                 newFacets.put("sectionIndex", String.valueOf(i));
                 // When recursing into an array, the parent field name is the one that pointed to the array
-                findAndExtractRecursive(arrayElement, parentFieldName, childJsonPath, parentEnvelope, newFacets, results, counters);
+                findAndExtractRecursive(arrayElement, parentFieldName, childJsonPath, parentUsageKey, parentEnvelope, newFacets, results, counters);
             }
         }
     }
@@ -1002,6 +1003,19 @@ public class DataIngestionService {
                 i++;
             }
         }
+    }
+
+    private String toUsageKey(String sourcePath, String jsonPath) {
+        if (sourcePath == null || sourcePath.isBlank()) {
+            return jsonPath;
+        }
+        if (jsonPath == null || jsonPath.isBlank()) {
+            return sourcePath;
+        }
+        if (sourcePath.equals(jsonPath)) {
+            return sourcePath;
+        }
+        return sourcePath + USAGE_JSON_DELIM + jsonPath;
     }
 
     private @Nullable Map<String, Object> finalizeCandidate(CandidateItem candidate, IngestionCounters counters) {
