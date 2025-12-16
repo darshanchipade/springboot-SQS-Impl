@@ -566,7 +566,7 @@ public class DataIngestionService {
             rootEnvelope.setProvenance(new HashMap<>());
 
             IngestionCounters counters = new IngestionCounters();
-            findAndExtractRecursive(rootNode, "#", rootEnvelope, new Facets(), allExtractedItems, counters);
+            findAndExtractRecursive(rootNode, "#", "#", rootEnvelope, new Facets(), allExtractedItems, counters);
 
             boolean shouldReturnAll = returnAllOverride != null ? returnAllOverride : returnAllItems;
             List<Map<String, Object>> itemsToProcess =
@@ -706,9 +706,15 @@ public class DataIngestionService {
         return cleansedDataStoreRepository.save(cleansedDataStore);
     }
 
-    private void findAndExtractRecursive(JsonNode currentNode, String parentFieldName, Envelope parentEnvelope, Facets parentFacets, List<CandidateItem> results, IngestionCounters counters) {
+    private void findAndExtractRecursive(JsonNode currentNode,
+                                         String parentFieldName,
+                                         String jsonPath,
+                                         Envelope parentEnvelope,
+                                         Facets parentFacets,
+                                         List<CandidateItem> results,
+                                         IngestionCounters counters) {
         if (currentNode.isObject()) {
-            Envelope currentEnvelope = buildCurrentEnvelope(currentNode, parentEnvelope);
+            Envelope currentEnvelope = buildCurrentEnvelope(currentNode, parentEnvelope, jsonPath);
             Facets currentFacets = buildCurrentFacets(currentNode, parentFacets);
 
             // Section detection logic
@@ -729,6 +735,7 @@ public class DataIngestionService {
             currentNode.fields().forEachRemaining(entry -> {
                 String fieldKey = entry.getKey();
                 JsonNode fieldValue = entry.getValue();
+                String childJsonPath = jsonPath + "/" + fieldKey;
                 String fragmentPath = currentEnvelope.getSourcePath();
                 String containerPath = (parentEnvelope != null
                         && parentEnvelope.getSourcePath() != null
@@ -746,19 +753,19 @@ public class DataIngestionService {
                         String effectiveFieldName = fieldKey.equals("copy") ? parentFieldName : fieldKey;
                         processContentField(fieldValue.asText(), effectiveFieldName, currentEnvelope, currentFacets, results, counters, false);// copy object
                     } else if (fieldValue.isObject() && fieldValue.has("copy") && fieldValue.get("copy").isTextual()) {
-                        Envelope contentEnv = buildCurrentEnvelope(fieldValue, currentEnvelope);
+                        Envelope contentEnv = buildCurrentEnvelope(fieldValue, currentEnvelope, childJsonPath);
                         contentEnv.setUsagePath(usagePath);
                         processContentField(fieldValue.get("copy").asText(), fieldKey, contentEnv, currentFacets, results, counters, false);
 
                         // text object
                     } else if (fieldValue.isObject() && fieldValue.has("text") && fieldValue.get("text").isTextual()) {
-                        Envelope contentEnv = buildCurrentEnvelope(fieldValue, currentEnvelope);
+                        Envelope contentEnv = buildCurrentEnvelope(fieldValue, currentEnvelope, childJsonPath);
                         contentEnv.setUsagePath(usagePath);
                         processContentField(fieldValue.get("text").asText(), fieldKey, contentEnv, currentFacets, results, counters, false);
 
                         // url object (string value)
                     } else if (fieldValue.isObject() && fieldValue.has("url") && fieldValue.get("url").isTextual()) {
-                        Envelope contentEnv = buildCurrentEnvelope(fieldValue, currentEnvelope);
+                        Envelope contentEnv = buildCurrentEnvelope(fieldValue, currentEnvelope, childJsonPath);
                         contentEnv.setUsagePath(usagePath);
                         processContentField(fieldValue.get("url").asText(), fieldKey, contentEnv, currentFacets, results, counters, false);
                     }
@@ -806,31 +813,40 @@ public class DataIngestionService {
                         }
                     } else {
                         currentEnvelope.setUsagePath(usagePath);
-                        findAndExtractRecursive(fieldValue, fieldKey, currentEnvelope, currentFacets, results, counters);
+                        findAndExtractRecursive(fieldValue, fieldKey, childJsonPath, currentEnvelope, currentFacets, results, counters);
                     }
                 } else if (fieldKey.toLowerCase().contains("analytics")) {
-                    processAnalyticsNode(fieldValue, fieldKey, currentEnvelope, currentFacets, results, counters);
+                    processAnalyticsNode(fieldValue, fieldKey, childJsonPath, currentEnvelope, currentFacets, results, counters);
                 } else if (fieldValue.isObject() || fieldValue.isArray()) {
                     currentEnvelope.setUsagePath(usagePath);
-                    findAndExtractRecursive(fieldValue, fieldKey, currentEnvelope, currentFacets, results, counters);
+                    findAndExtractRecursive(fieldValue, fieldKey, childJsonPath, currentEnvelope, currentFacets, results, counters);
                 }
             });
         } else if (currentNode.isArray()) {
             for (int i = 0; i < currentNode.size(); i++) {
                 JsonNode arrayElement = currentNode.get(i);
+                String childJsonPath = jsonPath + "[" + i + "]";
                 Facets newFacets = new Facets();
                 newFacets.putAll(parentFacets);
                 newFacets.put("sectionIndex", String.valueOf(i));
                 // When recursing into an array, the parent field name is the one that pointed to the array
-                findAndExtractRecursive(arrayElement, parentFieldName, parentEnvelope, newFacets, results, counters);
+                findAndExtractRecursive(arrayElement, parentFieldName, childJsonPath, parentEnvelope, newFacets, results, counters);
             }
         }
     }
 
 
-    private Envelope buildCurrentEnvelope(JsonNode currentNode, Envelope parentEnvelope) {
+    private Envelope buildCurrentEnvelope(JsonNode currentNode, Envelope parentEnvelope, String jsonPath) {
         Envelope currentEnvelope = new Envelope();
-        String path = currentNode.has("_path") ? currentNode.get("_path").asText(parentEnvelope.getSourcePath()) : parentEnvelope.getSourcePath();
+        // Prefer explicit AEM _path; otherwise use the traversal jsonPath to keep items uniquely addressable.
+        String path;
+        if (currentNode != null && currentNode.has("_path") && currentNode.get("_path").isTextual()) {
+            path = currentNode.get("_path").asText();
+        } else if (jsonPath != null && !jsonPath.isBlank()) {
+            path = jsonPath;
+        } else {
+            path = parentEnvelope != null ? parentEnvelope.getSourcePath() : null;
+        }
         currentEnvelope.setSourcePath(path);
         currentEnvelope.setModel(currentNode.path("_model").asText(parentEnvelope.getModel()));
         currentEnvelope.setUsagePath(currentNode.path("_usagePath").asText(parentEnvelope.getUsagePath()));
@@ -931,8 +947,13 @@ public class DataIngestionService {
         return type instanceof String s && s.toLowerCase().contains("analytics");
     }
 
-    private void processAnalyticsNode(JsonNode node, String fieldKey, Envelope env, Facets facets,
-                                      List<CandidateItem> results, IngestionCounters counters) {
+    private void processAnalyticsNode(JsonNode node,
+                                      String fieldKey,
+                                      String jsonPath,
+                                      Envelope env,
+                                      Facets facets,
+                                      List<CandidateItem> results,
+                                      IngestionCounters counters) {
         if (node == null || node.isNull()) return;
 
         if (node.isTextual() || node.isNumber() || node.isBoolean()) {
@@ -941,7 +962,7 @@ public class DataIngestionService {
         }
 
         if (node.isObject()) {
-            Envelope analyticsEnvelope = buildCurrentEnvelope(node, env);
+            Envelope analyticsEnvelope = buildCurrentEnvelope(node, env, jsonPath);
             JsonNode valueNode = node.get("value");
             if (valueNode != null && !valueNode.isNull()) {
                 processContentField(valueNode.asText(), fieldKey, analyticsEnvelope, facets, results, counters, true);
@@ -949,12 +970,16 @@ public class DataIngestionService {
             for (String k : List.of("items","children","child")) {
                 JsonNode arr = node.get(k);
                 if (arr != null && arr.isArray()) {
-                    for (JsonNode child : arr) processAnalyticsNode(child, fieldKey, analyticsEnvelope, facets, results, counters);
+                    int idx = 0;
+                    for (JsonNode child : arr) {
+                        processAnalyticsNode(child, fieldKey, jsonPath + "/" + k + "[" + idx + "]", analyticsEnvelope, facets, results, counters);
+                        idx++;
+                    }
                 }
             }
             node.fields().forEachRemaining(e -> {
                 if (!List.of("items","children","child","value").contains(e.getKey())) {
-                    processAnalyticsNode(e.getValue(), fieldKey, analyticsEnvelope, facets, results, counters);
+                    processAnalyticsNode(e.getValue(), fieldKey, jsonPath + "/" + e.getKey(), analyticsEnvelope, facets, results, counters);
                 }
             });
             return;
@@ -964,7 +989,7 @@ public class DataIngestionService {
             int i = 0;
             for (JsonNode el : node) {
                 if (el.isObject()) {
-                    Envelope elEnv = buildCurrentEnvelope(el, env);
+                    Envelope elEnv = buildCurrentEnvelope(el, env, jsonPath + "[" + i + "]");
                     String name = el.path("name").asText(null);
                     String val  = el.path("value").asText(null);
                     if (val != null && !val.isBlank()) {
