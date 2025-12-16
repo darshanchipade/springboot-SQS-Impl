@@ -174,8 +174,9 @@ public class EnrichmentProcessor {
                 persistenceService.saveErrorEnrichedElement(itemDetail, cleansedDataEntry, "ERROR_ENRICHMENT_FAILED", msg);
             } else {
                 Map<String, Object> ctx = objectMapper.convertValue(itemDetail.context, new com.fasterxml.jackson.core.type.TypeReference<>() {});
-                ctx.put("fullContextId", itemDetail.sourcePath + "::" + itemDetail.originalFieldName);
+                ctx.put("fullContextId", itemDetail.usagePath + "::" + itemDetail.originalFieldName);
                 ctx.put("sourcePath", itemDetail.sourcePath);
+                ctx.put("usagePath", itemDetail.usagePath);
                 Map<String, Object> prov = new HashMap<>();
                 prov.put("modelId", bedrockEnrichmentService.getConfiguredModelId());
                 ctx.put("provenance", prov);
@@ -195,9 +196,9 @@ public class EnrichmentProcessor {
     }
 
     private void checkCompletion(CleansedDataStore cleansedDataEntry) {
-        // expected = unique items by (sourcePath, originalFieldName)
+        // expected = unique items by (usagePath, originalFieldName)
         long expected = cleansedDataEntry.getCleansedItems().stream()
-                .map(item -> ((String) item.get("sourcePath")) + "::" + ((String) item.get("originalFieldName")))
+                .map(item -> ((String) item.get("usagePath")) + "::" + ((String) item.get("originalFieldName")))
                 .distinct()
                 .count();
 

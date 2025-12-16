@@ -86,7 +86,8 @@ public class DataExtractionController {
     @PostMapping("/extract-cleanse-enrich-and-store")
     public ResponseEntity<String> extractCleanseEnrichAndStore(
             @Parameter(description = "The JSON file to upload.", required = true)
-            @RequestParam("file") MultipartFile file) {
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(name = "returnAllItems", required = false) Boolean returnAllItems) {
 
         if (file.isEmpty()) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("File is empty");
@@ -97,7 +98,7 @@ public class DataExtractionController {
 
         try {
             String content = new String(file.getBytes());
-            CleansedDataStore cleansedDataEntry = dataIngestionService.ingestAndCleanseJsonPayload(content, sourceIdentifier);
+            CleansedDataStore cleansedDataEntry = dataIngestionService.ingestAndCleanseJsonPayload(content, sourceIdentifier, returnAllItems);
             return handleCleansingOutcome(cleansedDataEntry, sourceIdentifier);
         } catch (IOException e) {
             logger.error("Error reading uploaded file", e);
@@ -139,7 +140,8 @@ public class DataExtractionController {
     @PostMapping("/ingest-json-payload")
     public ResponseEntity<String> ingestJsonPayload(
             @Parameter(description = "JSON payload to ingest and process", required = true)
-            @RequestBody String jsonPayload) {
+            @RequestBody String jsonPayload,
+            @RequestParam(name = "returnAllItems", required = false) Boolean returnAllItems) {
         String sourceIdentifier = "api-payload-" + UUID.randomUUID().toString();
         logger.info("Received POST request to process JSON payload. Assigned sourceIdentifier: {}", sourceIdentifier);
         CleansedDataStore cleansedDataEntry = null;
@@ -150,7 +152,7 @@ public class DataExtractionController {
                 return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("JSON payload cannot be empty.");
             }
 
-            cleansedDataEntry = dataIngestionService.ingestAndCleanseJsonPayload(jsonPayload, sourceIdentifier);
+            cleansedDataEntry = dataIngestionService.ingestAndCleanseJsonPayload(jsonPayload, sourceIdentifier, returnAllItems);
             return handleCleansingOutcome(cleansedDataEntry, sourceIdentifier);
 
         } catch (IllegalArgumentException e) {

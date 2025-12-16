@@ -85,12 +85,12 @@ public class EnrichmentPipelineService {
 
         // Convert and deduplicate by (sourcePath, originalFieldName)
         List<CleansedItemDetail> rawItems = convertMapsToCleansedItemDetails(maps);
-        logger.info("Converted {} cleansed entries into {} unique (sourcePath,field) pairs for CleansedDataStore ID {}.",
+        logger.info("Converted {} cleansed entries into {} unique (usagePath,field) pairs for CleansedDataStore ID {}.",
                 maps.size(), rawItems.size(), cleansedDataStoreId);
         List<CleansedItemDetail> itemsToEnrich = rawItems.stream()
                 .collect(Collectors.collectingAndThen(
                         Collectors.toMap(
-                                it -> it.sourcePath + "::" + it.originalFieldName,
+                                it -> it.usagePath + "::" + it.originalFieldName,
                                 it -> it,
                                 (a, b) -> a,
                                 LinkedHashMap::new
@@ -101,8 +101,8 @@ public class EnrichmentPipelineService {
         // Filter to only items that need enrichment (text changed)
         List<CleansedItemDetail> changedItems = itemsToEnrich.stream()
                 .filter(itemDetail -> !enrichedContentElementRepository
-                        .existsByItemSourcePathAndItemOriginalFieldNameAndCleansedText(
-                                itemDetail.sourcePath,
+                        .existsByItemUsagePathAndItemOriginalFieldNameAndCleansedText(
+                                itemDetail.usagePath,
                                 itemDetail.originalFieldName,
                                 itemDetail.cleansedContent))
                 .collect(Collectors.toList());
@@ -238,12 +238,16 @@ public class EnrichmentPipelineService {
                 .map(map -> {
                     try {
                         String sourcePath = (String) map.get("sourcePath");
+                        String usagePath = (String) map.get("usagePath");
                         String originalFieldName = (String) map.get("originalFieldName");
                         String cleansedContent = (String) map.get("cleansedContent");
                         String model = (String) map.get("model");
                         EnrichmentContext context = objectMapper.convertValue(map.get("context"), EnrichmentContext.class);
                         boolean skipEnrichment = extractSkipFlag(map.get("skipEnrichment"));
-                        return new CleansedItemDetail(sourcePath, originalFieldName, cleansedContent, model, context, skipEnrichment);
+                        if (usagePath == null && context != null && context.getEnvelope() != null) {
+                            usagePath = context.getEnvelope().getUsagePath();
+                        }
+                        return new CleansedItemDetail(sourcePath, usagePath, originalFieldName, cleansedContent, model, context, skipEnrichment);
                     } catch (Exception e) {
                         logger.warn("Could not convert map to CleansedItemDetail object. Skipping item. Map: {}, Error: {}", map, e.getMessage());
                         return null;

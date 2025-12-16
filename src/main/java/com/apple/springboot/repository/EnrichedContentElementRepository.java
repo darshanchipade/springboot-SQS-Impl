@@ -14,16 +14,16 @@ public interface EnrichedContentElementRepository extends JpaRepository<Enriched
     long countByCleansedDataIdAndStatusContaining(UUID cleansedDataId, String status);
     long countByCleansedDataIdAndStatusIgnoreCase(UUID cleansedDataId, String status);
     List<EnrichedContentElement> findAllByCleansedDataId(UUID cleansedDataId);
-    boolean existsByItemSourcePathAndItemOriginalFieldNameAndStatus(String sourcePath, String fieldName, String status);
-    boolean existsByItemSourcePathAndItemOriginalFieldNameAndCleansedText(String sourcePath, String fieldName, String cleansedText);
-    boolean existsByCleansedDataIdAndItemSourcePathAndItemOriginalFieldNameAndCleansedText(UUID cleansedDataId, String sourcePath, String fieldName, String cleansedText);
-    boolean existsByCleansedDataIdAndItemSourcePathAndItemOriginalFieldNameAndStatus(UUID cleansedDataId, String sourcePath, String fieldName, String status);
+    boolean existsByItemUsagePathAndItemOriginalFieldNameAndStatus(String usagePath, String fieldName, String status);
+    boolean existsByItemUsagePathAndItemOriginalFieldNameAndCleansedText(String usagePath, String fieldName, String cleansedText);
+    boolean existsByCleansedDataIdAndItemUsagePathAndItemOriginalFieldNameAndCleansedText(UUID cleansedDataId, String usagePath, String fieldName, String cleansedText);
+    boolean existsByCleansedDataIdAndItemUsagePathAndItemOriginalFieldNameAndStatus(UUID cleansedDataId, String usagePath, String fieldName, String status);
 
     /**
      * Finds an existing element based on its logical key to prevent duplicates.
      * This is the correct method signature.
      */
-    Optional<EnrichedContentElement> findByCleansedDataIdAndItemSourcePathAndItemOriginalFieldName(UUID cleansedDataId, String sourcePath, String fieldName);
+    Optional<EnrichedContentElement> findByCleansedDataIdAndItemUsagePathAndItemOriginalFieldName(UUID cleansedDataId, String usagePath, String fieldName);
     List<EnrichedContentElement> findByCleansedDataIdOrderByEnrichedAtAsc(UUID cleansedDataId);
 
 }
