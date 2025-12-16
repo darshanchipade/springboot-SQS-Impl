@@ -373,11 +373,24 @@ public class DataIngestionService {
     }
     @Transactional
     public CleansedDataStore ingestAndCleanseJsonPayload(String jsonPayload, String sourceIdentifier) throws JsonProcessingException {
+        return ingestAndCleanseJsonPayload(jsonPayload, sourceIdentifier, null);
+    }
+
+    /**
+     * Ingest a JSON payload and optionally override delta filtering.
+     *
+     * @param returnAllOverride when true, returns all items (full run) even if unchanged; when false, forces delta-only;
+     *                          when null, uses configured app.ingestion.return-all-items behavior.
+     */
+    @Transactional
+    public CleansedDataStore ingestAndCleanseJsonPayload(String jsonPayload,
+                                                        String sourceIdentifier,
+                                                        @Nullable Boolean returnAllOverride) throws JsonProcessingException {
         RawDataStore rawDataStore = findOrCreateRawDataStore(jsonPayload, sourceIdentifier);
         if (rawDataStore == null) {
             return null;
         }
-        return processLoadedContent(jsonPayload, rawDataStore);
+        return processLoadedContent(jsonPayload, rawDataStore, null, returnAllOverride);
     }
 
     /**
@@ -417,7 +430,7 @@ public class DataIngestionService {
 
         logger.info("Resuming ingestion pipeline for CleansedDataStore {} using RawDataStore {}", cleansedDataStoreId, rawDataId);
         //return processLoadedContent(rawJsonContent, rawDataStore);
-        return processLoadedContent(rawJsonContent, rawDataStore, existingCleansed);
+        return processLoadedContent(rawJsonContent, rawDataStore, existingCleansed, null);
     }
 
     private CleansedDataStore refreshExistingCleansedRecord(
@@ -531,12 +544,19 @@ public class DataIngestionService {
 
     private CleansedDataStore processLoadedContent(String rawJsonContent,
                                                    RawDataStore rawDataStore) throws JsonProcessingException {
-        return processLoadedContent(rawJsonContent, rawDataStore, null);
+        return processLoadedContent(rawJsonContent, rawDataStore, null, null);
     }
 
     private CleansedDataStore processLoadedContent(String rawJsonContent,
                                                    RawDataStore rawDataStore,
                                                    @Nullable CleansedDataStore existingCleansed) throws JsonProcessingException {
+        return processLoadedContent(rawJsonContent, rawDataStore, existingCleansed, null);
+    }
+
+    private CleansedDataStore processLoadedContent(String rawJsonContent,
+                                                   RawDataStore rawDataStore,
+                                                   @Nullable CleansedDataStore existingCleansed,
+                                                   @Nullable Boolean returnAllOverride) throws JsonProcessingException {
         try {
             JsonNode rootNode = objectMapper.readTree(rawJsonContent);
             List<CandidateItem> allExtractedItems = new ArrayList<>();
@@ -548,8 +568,9 @@ public class DataIngestionService {
             IngestionCounters counters = new IngestionCounters();
             findAndExtractRecursive(rootNode, "#", rootEnvelope, new Facets(), allExtractedItems, counters);
 
+            boolean shouldReturnAll = returnAllOverride != null ? returnAllOverride : returnAllItems;
             List<Map<String, Object>> itemsToProcess =
-                    returnAllItems ? finalizeAllItems(allExtractedItems, counters) : filterForChangedItems(allExtractedItems, counters);
+                    shouldReturnAll ? finalizeAllItems(allExtractedItems, counters) : filterForChangedItems(allExtractedItems, counters);
 
             if (debugCountersEnabled) {
                 long keptPreFilterCopy = counters.copyKept;
