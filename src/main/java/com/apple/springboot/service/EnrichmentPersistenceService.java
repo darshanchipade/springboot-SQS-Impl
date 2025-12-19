@@ -42,8 +42,7 @@ public class EnrichmentPersistenceService {
                                     Map<String, Object> bedrockResponse, String elementStatus) throws JsonProcessingException {
 
         // Find existing element or create a new one to prevent duplicates.
-        Optional<EnrichedContentElement> existingElementOpt = enrichedContentElementRepository.findByCleansedDataIdAndItemSourcePathAndItemOriginalFieldName(
-                parentEntry.getId(), itemDetail.sourcePath, itemDetail.originalFieldName);
+        Optional<EnrichedContentElement> existingElementOpt = resolveExistingElement(parentEntry.getId(), itemDetail);
 
         EnrichedContentElement enrichedElement = existingElementOpt.orElse(new EnrichedContentElement());
 
@@ -52,6 +51,7 @@ public class EnrichmentPersistenceService {
             enrichedElement.setVersion(parentEntry.getVersion());
             enrichedElement.setSourceUri(parentEntry.getSourceUri());
             enrichedElement.setItemSourcePath(itemDetail.sourcePath);
+            enrichedElement.setItemUsagePath(itemDetail.usagePath);
             enrichedElement.setItemOriginalFieldName(itemDetail.originalFieldName);
             enrichedElement.setItemModelHint(itemDetail.model);
         }
@@ -89,8 +89,7 @@ public class EnrichmentPersistenceService {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void saveErrorEnrichedElement(CleansedItemDetail itemDetail, CleansedDataStore parentEntry, String status, String errorMessage) {
 
-        Optional<EnrichedContentElement> existingElementOpt = enrichedContentElementRepository.findByCleansedDataIdAndItemSourcePathAndItemOriginalFieldName(
-                parentEntry.getId(), itemDetail.sourcePath, itemDetail.originalFieldName);
+        Optional<EnrichedContentElement> existingElementOpt = resolveExistingElement(parentEntry.getId(), itemDetail);
 
         EnrichedContentElement errorElement = existingElementOpt.orElse(new EnrichedContentElement());
 
@@ -99,6 +98,7 @@ public class EnrichmentPersistenceService {
             errorElement.setVersion(parentEntry.getVersion());
             errorElement.setSourceUri(parentEntry.getSourceUri());
             errorElement.setItemSourcePath(itemDetail.sourcePath);
+            errorElement.setItemUsagePath(itemDetail.usagePath);
             errorElement.setItemOriginalFieldName(itemDetail.originalFieldName);
             errorElement.setItemModelHint(itemDetail.model);
         }
@@ -125,8 +125,7 @@ public class EnrichmentPersistenceService {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void saveSkippedEnrichedElement(CleansedItemDetail itemDetail, CleansedDataStore parentEntry, String status) {
 
-        Optional<EnrichedContentElement> existingElementOpt = enrichedContentElementRepository.findByCleansedDataIdAndItemSourcePathAndItemOriginalFieldName(
-                parentEntry.getId(), itemDetail.sourcePath, itemDetail.originalFieldName);
+        Optional<EnrichedContentElement> existingElementOpt = resolveExistingElement(parentEntry.getId(), itemDetail);
 
         EnrichedContentElement skippedElement = existingElementOpt.orElse(new EnrichedContentElement());
 
@@ -135,6 +134,7 @@ public class EnrichmentPersistenceService {
             skippedElement.setVersion(parentEntry.getVersion());
             skippedElement.setSourceUri(parentEntry.getSourceUri());
             skippedElement.setItemSourcePath(itemDetail.sourcePath);
+            skippedElement.setItemUsagePath(itemDetail.usagePath);
             skippedElement.setItemOriginalFieldName(itemDetail.originalFieldName);
             skippedElement.setItemModelHint(itemDetail.model);
         }
@@ -169,5 +169,17 @@ public class EnrichmentPersistenceService {
                 .setParameter("id", cleansedDataId)
                 .getSingleResult();
         logger.info("EnrichedContentElements persisted for {} after {}: {}", cleansedDataId, context, count);
+    }
+
+    private Optional<EnrichedContentElement> resolveExistingElement(UUID cleansedDataId, CleansedItemDetail itemDetail) {
+        if (cleansedDataId == null || itemDetail == null) {
+            return Optional.empty();
+        }
+        if (itemDetail.usagePath != null && !itemDetail.usagePath.isBlank()) {
+            return enrichedContentElementRepository.findByCleansedDataIdAndItemUsagePathAndItemOriginalFieldName(
+                    cleansedDataId, itemDetail.usagePath, itemDetail.originalFieldName);
+        }
+        return enrichedContentElementRepository.findByCleansedDataIdAndItemSourcePathAndItemOriginalFieldName(
+                cleansedDataId, itemDetail.sourcePath, itemDetail.originalFieldName);
     }
 }
