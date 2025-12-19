@@ -71,7 +71,7 @@ public class DataIngestionService {
     private boolean keepBlankAfterCleanse;
 
     // If true, bypass change filter and return all extracted items
-    @Value("${app.ingestion.return-all-items:true}")
+    @Value("${app.ingestion.return-all-items:false}")
     private boolean returnAllItems;
 
     // If true, include contextHash in change detection
@@ -494,45 +494,70 @@ public class DataIngestionService {
                                                    @Nullable CleansedDataStore existingCleansed) throws JsonProcessingException {
         try {
             JsonNode rootNode = objectMapper.readTree(rawJsonContent);
-            List<Map<String, Object>> allExtractedItems = new ArrayList<>();
+            List<Map<String, Object>> deltaItems = new ArrayList<>();
             Envelope rootEnvelope = new Envelope();
             rootEnvelope.setSourcePath(rawDataStore.getSourceUri());
             rootEnvelope.setUsagePath(rawDataStore.getSourceUri());
             rootEnvelope.setProvenance(new HashMap<>());
 
             IngestionCounters counters = new IngestionCounters();
-            findAndExtractRecursive(rootNode, "#", rootEnvelope, new Facets(), allExtractedItems, counters);
+            CleansedDataStore baseline = resolveBaselineCleansedSnapshot(rawDataStore, existingCleansed);
+            BaselineIndex baselineIndex = BaselineIndex.from(baseline != null ? baseline.getCleansedItems() : null);
+            boolean fullCleanse = returnAllItems || baselineIndex.isEmpty();
+            Set<String> removedKeys = new HashSet<>();
 
-            List<Map<String, Object>> itemsToProcess =
-                    returnAllItems ? allExtractedItems : filterForChangedItems(allExtractedItems);
+            findAndExtractRecursive(
+                    rootNode,
+                    "#",
+                    rootEnvelope,
+                    new Facets(),
+                    deltaItems,
+                    counters,
+                    baselineIndex,
+                    fullCleanse,
+                    removedKeys
+            );
+
+            boolean hasChanges = !deltaItems.isEmpty() || !removedKeys.isEmpty();
+            List<Map<String, Object>> itemsToStore = fullCleanse
+                    ? deltaItems
+                    : mergeBaselineWithDeltas(
+                    baseline != null ? baseline.getCleansedItems() : null,
+                    deltaItems,
+                    removedKeys
+            );
 
             if (debugCountersEnabled) {
                 long keptPreFilterCopy = counters.copyKept;
                 long keptPreFilterAnalytics = counters.analyticsKept;
-                long keptPostFilterCopy =
-                        itemsToProcess.stream().filter(i -> !isAnalyticsItem(i)).count();
-                long keptPostFilterAnalytics =
-                        itemsToProcess.stream().filter(this::isAnalyticsItem).count();
-                logger.info("Counters: copy found={}, kept(after-cleanse)={}, kept(after-filter)={}; analytics found={}, kept(after-cleanse)={}, kept(after-filter)={}; blank-kept(copy)={}, blank-kept(analytics)={}",
-                        counters.copyFound, keptPreFilterCopy, keptPostFilterCopy,
-                        counters.analyticsFound, keptPreFilterAnalytics, keptPostFilterAnalytics,
+                long keptPostMergeCopy =
+                        itemsToStore.stream().filter(i -> !isAnalyticsItem(i)).count();
+                long keptPostMergeAnalytics =
+                        itemsToStore.stream().filter(this::isAnalyticsItem).count();
+                logger.info("Counters: copy found={}, kept(after-cleanse)={}, kept(after-merge)={}; analytics found={}, kept(after-cleanse)={}, kept(after-merge)={}; blank-kept(copy)={}, blank-kept(analytics)={}",
+                        counters.copyFound, keptPreFilterCopy, keptPostMergeCopy,
+                        counters.analyticsFound, keptPreFilterAnalytics, keptPostMergeAnalytics,
                         counters.copyBlankKept, counters.analyticsBlankKept);
             }
 
-            if (itemsToProcess.isEmpty()) {
+            if (!hasChanges) {
                 logger.info("No new or updated content to process for raw_data_id: {}", rawDataStore.getId());
                 rawDataStore.setStatus("PROCESSED_NO_CHANGES");
                 rawDataStoreRepository.save(rawDataStore);
-                return existingCleansed != null
-                        ? existingCleansed
-                        : cleansedDataStoreRepository
+                if (existingCleansed != null) {
+                    return existingCleansed;
+                }
+                if (baseline != null) {
+                    return baseline;
+                }
+                return cleansedDataStoreRepository
                         .findTopByRawDataIdOrderByCleansedAtDesc(rawDataStore.getId())
                         .orElse(null);
             }
 
             return existingCleansed != null
-                    ? refreshExistingCleansedRecord(existingCleansed, itemsToProcess, rawDataStore)
-                    : createCleansedDataStore(itemsToProcess, rawDataStore);
+                    ? refreshExistingCleansedRecord(existingCleansed, itemsToStore, rawDataStore)
+                    : createCleansedDataStore(itemsToStore, rawDataStore);
         } catch (Exception e) {
             rawDataStore.setStatus("EXTRACTION_ERROR");
             rawDataStoreRepository.save(rawDataStore);
@@ -544,41 +569,113 @@ public class DataIngestionService {
         }
     }
 
-    private List<Map<String, Object>> filterForChangedItems(List<Map<String, Object>> allItems) {
-        List<Map<String, Object>> changedItems = new ArrayList<>();
-        for (Map<String, Object> item : allItems) {
-            String sourcePath = (String) item.get("sourcePath");
-            String itemType = (String) item.get("itemType");
-            String usagePath = (String) item.get("usagePath");
-            String newContentHash = (String) item.get("contentHash");
-            String newContextHash = (String) item.get("contextHash");
-
-            if (sourcePath == null || itemType == null) continue;
-
-            Optional<ContentHash> existingHashOpt =
-                    contentHashRepository.findBySourcePathAndItemTypeAndUsagePath(sourcePath, itemType, usagePath);
-            if (existingHashOpt.isEmpty() && !strictUsagePath) {
-                existingHashOpt = contentHashRepository.findBySourcePathAndItemType(sourcePath, itemType);
-                if (existingHashOpt.isPresent()) {
-                    logger.debug("Change detection fallback matched by (sourcePath,itemType) without usagePath for {} :: {}", sourcePath, itemType);
-                }
-            }
-
-            boolean contentChanged = existingHashOpt.isEmpty()
-                    || !Objects.equals(existingHashOpt.get().getContentHash(), newContentHash);
-            boolean contextChanged = considerContextChange && (existingHashOpt.isEmpty()
-                    || !Objects.equals(existingHashOpt.get().getContextHash(), newContextHash));
-
-            if (existingHashOpt.isEmpty() || contentChanged || contextChanged) {
-                changedItems.add(item);
-            }
-            // Always persist latest observed hashes for this key
-            ContentHash hashToSave = existingHashOpt.orElse(new ContentHash(sourcePath, itemType, usagePath, null, null));
-            hashToSave.setContentHash(newContentHash);
-            hashToSave.setContextHash(newContextHash);
-            contentHashRepository.save(hashToSave);
+    private CleansedDataStore resolveBaselineCleansedSnapshot(RawDataStore rawDataStore, @Nullable CleansedDataStore existingCleansed) {
+        if (existingCleansed != null) {
+            return existingCleansed;
         }
-        return changedItems;
+        if (rawDataStore == null || rawDataStore.getSourceUri() == null) {
+            return null;
+        }
+        Optional<CleansedDataStore> baselineOpt = cleansedDataStoreRepository.findTopBySourceUriOrderByCleansedAtDesc(rawDataStore.getSourceUri());
+        if (baselineOpt.isEmpty()) {
+            return null;
+        }
+        CleansedDataStore baseline = baselineOpt.get();
+        // Avoid self-selection in odd replay scenarios
+        if (rawDataStore.getId() != null && rawDataStore.getId().equals(baseline.getRawDataId())) {
+            return null;
+        }
+        return baseline;
+    }
+
+    private List<Map<String, Object>> mergeBaselineWithDeltas(
+            @Nullable List<Map<String, Object>> baselineItems,
+            List<Map<String, Object>> deltas,
+            Set<String> removedKeys) {
+        LinkedHashMap<String, Map<String, Object>> merged = new LinkedHashMap<>();
+        if (baselineItems != null) {
+            for (Map<String, Object> item : baselineItems) {
+                if (item == null) continue;
+                String key = buildStableItemKey(item);
+                if (key == null) continue;
+                if (removedKeys.contains(key)) continue;
+                merged.putIfAbsent(key, item);
+            }
+        }
+        for (Map<String, Object> delta : deltas) {
+            if (delta == null) continue;
+            String key = buildStableItemKey(delta);
+            if (key == null) continue;
+            merged.put(key, delta);
+        }
+        return new ArrayList<>(merged.values());
+    }
+
+    private String buildStableItemKey(Map<String, Object> item) {
+        if (item == null) return null;
+        String sourcePath = safeString(item.get("sourcePath"));
+        String itemType = safeString(item.get("itemType"));
+        String usagePath = safeString(item.get("usagePath"));
+        if (sourcePath == null || itemType == null) return null;
+        return buildStableItemKey(sourcePath, itemType, usagePath);
+    }
+
+    private String buildStableItemKey(String sourcePath, String itemType, @Nullable String usagePath) {
+        // Use a delimiter that is very unlikely to appear in paths.
+        String u = (usagePath == null) ? "" : usagePath;
+        return sourcePath + " ||| " + itemType + " ||| " + u;
+    }
+
+    private static String safeString(Object value) {
+        return value instanceof String s ? s : null;
+    }
+
+    private static final class BaselineIndex {
+        private final Map<String, Map<String, Object>> byFullKey;
+        private final Map<String, Map<String, Object>> byFallbackKey;
+
+        private BaselineIndex(Map<String, Map<String, Object>> byFullKey,
+                              Map<String, Map<String, Object>> byFallbackKey) {
+            this.byFullKey = byFullKey;
+            this.byFallbackKey = byFallbackKey;
+        }
+
+        static BaselineIndex from(@Nullable List<Map<String, Object>> baselineItems) {
+            Map<String, Map<String, Object>> full = new HashMap<>();
+            Map<String, Map<String, Object>> fallback = new HashMap<>();
+            if (baselineItems == null) {
+                return new BaselineIndex(full, fallback);
+            }
+            for (Map<String, Object> item : baselineItems) {
+                if (item == null) continue;
+                String sourcePath = safeString(item.get("sourcePath"));
+                String itemType = safeString(item.get("itemType"));
+                String usagePath = safeString(item.get("usagePath"));
+                if (sourcePath == null || itemType == null) continue;
+
+                String fullKey = sourcePath + " ||| " + itemType + " ||| " + (usagePath == null ? "" : usagePath);
+                full.putIfAbsent(fullKey, item);
+
+                String fallbackKey = sourcePath + " ||| " + itemType;
+                fallback.putIfAbsent(fallbackKey, item);
+            }
+            return new BaselineIndex(full, fallback);
+        }
+
+        boolean isEmpty() {
+            return byFullKey.isEmpty() && byFallbackKey.isEmpty();
+        }
+
+        @Nullable
+        Map<String, Object> lookup(String sourcePath, String itemType, @Nullable String usagePath, boolean strictUsagePath) {
+            if (sourcePath == null || itemType == null) return null;
+            String fullKey = sourcePath + " ||| " + itemType + " ||| " + (usagePath == null ? "" : usagePath);
+            Map<String, Object> hit = byFullKey.get(fullKey);
+            if (hit != null) return hit;
+            if (strictUsagePath) return null;
+            String fallbackKey = sourcePath + " ||| " + itemType;
+            return byFallbackKey.get(fallbackKey);
+        }
     }
 
     private CleansedDataStore createCleansedDataStore(List<Map<String, Object>> items, RawDataStore rawData) {
@@ -594,7 +691,15 @@ public class DataIngestionService {
         return cleansedDataStoreRepository.save(cleansedDataStore);
     }
 
-    private void findAndExtractRecursive(JsonNode currentNode, String parentFieldName, Envelope parentEnvelope, Facets parentFacets, List<Map<String, Object>> results, IngestionCounters counters) {
+    private void findAndExtractRecursive(JsonNode currentNode,
+                                         String parentFieldName,
+                                         Envelope parentEnvelope,
+                                         Facets parentFacets,
+                                         List<Map<String, Object>> results,
+                                         IngestionCounters counters,
+                                         BaselineIndex baseline,
+                                         boolean fullCleanse,
+                                         Set<String> removedKeys) {
         if (currentNode.isObject()) {
             Envelope currentEnvelope = buildCurrentEnvelope(currentNode, parentEnvelope);
             Facets currentFacets = buildCurrentFacets(currentNode, parentFacets);
@@ -632,23 +737,23 @@ public class DataIngestionService {
                         currentEnvelope.setUsagePath(usagePath);
                         // If the key is "copy", use the parent's name. Otherwise, use the key itself.
                         String effectiveFieldName = fieldKey.equals("copy") ? parentFieldName : fieldKey;
-                        processContentField(fieldValue.asText(), effectiveFieldName, currentEnvelope, currentFacets, results, counters, false);// copy object
+                        processContentField(fieldValue.asText(), effectiveFieldName, currentEnvelope, currentFacets, results, counters, false, baseline, fullCleanse, removedKeys);// copy object
                     } else if (fieldValue.isObject() && fieldValue.has("copy") && fieldValue.get("copy").isTextual()) {
                         Envelope contentEnv = buildCurrentEnvelope(fieldValue, currentEnvelope);
                         contentEnv.setUsagePath(usagePath);
-                        processContentField(fieldValue.get("copy").asText(), fieldKey, contentEnv, currentFacets, results, counters, false);
+                        processContentField(fieldValue.get("copy").asText(), fieldKey, contentEnv, currentFacets, results, counters, false, baseline, fullCleanse, removedKeys);
 
                         // text object
                     } else if (fieldValue.isObject() && fieldValue.has("text") && fieldValue.get("text").isTextual()) {
                         Envelope contentEnv = buildCurrentEnvelope(fieldValue, currentEnvelope);
                         contentEnv.setUsagePath(usagePath);
-                        processContentField(fieldValue.get("text").asText(), fieldKey, contentEnv, currentFacets, results, counters, false);
+                        processContentField(fieldValue.get("text").asText(), fieldKey, contentEnv, currentFacets, results, counters, false, baseline, fullCleanse, removedKeys);
 
                         // url object (string value)
                     } else if (fieldValue.isObject() && fieldValue.has("url") && fieldValue.get("url").isTextual()) {
                         Envelope contentEnv = buildCurrentEnvelope(fieldValue, currentEnvelope);
                         contentEnv.setUsagePath(usagePath);
-                        processContentField(fieldValue.get("url").asText(), fieldKey, contentEnv, currentFacets, results, counters, false);
+                        processContentField(fieldValue.get("url").asText(), fieldKey, contentEnv, currentFacets, results, counters, false, baseline, fullCleanse, removedKeys);
                     }
 //                    else if (fieldValue.isObject() && fieldValue.has("copy") && fieldValue.get("copy").isTextual()) {
 //                        currentEnvelope.setUsagePath(usagePath);
@@ -672,7 +777,7 @@ public class DataIngestionService {
                                         if (item.isObject() && item.has("copy") && item.get("copy").isTextual()) {
                                             currentEnvelope.setUsagePath(usagePath);
                                             String uniqueFieldName = "disclaimer[" + groupIndex + "][" + itemIndex + "]";
-                                            processContentField(item.get("copy").asText(), uniqueFieldName, currentEnvelope, currentFacets, results, counters, false);
+                                            processContentField(item.get("copy").asText(), uniqueFieldName, currentEnvelope, currentFacets, results, counters, false, baseline, fullCleanse, removedKeys);
                                         }
                                         itemIndex++;
                                     }
@@ -684,23 +789,23 @@ public class DataIngestionService {
                             for (JsonNode element : fieldValue) {
                                 if (element.isTextual()) {
                                     currentEnvelope.setUsagePath(usagePath);
-                                    processContentField(element.asText(), fieldKey + "[" + idx + "]", currentEnvelope, currentFacets, results, counters, false);
+                                    processContentField(element.asText(), fieldKey + "[" + idx + "]", currentEnvelope, currentFacets, results, counters, false, baseline, fullCleanse, removedKeys);
                                 } else if (element.isObject() && element.has("copy") && element.get("copy").isTextual()) {
                                     currentEnvelope.setUsagePath(usagePath);
-                                    processContentField(element.get("copy").asText(), fieldKey + "[" + idx + "]", currentEnvelope, currentFacets, results, counters, false);
+                                    processContentField(element.get("copy").asText(), fieldKey + "[" + idx + "]", currentEnvelope, currentFacets, results, counters, false, baseline, fullCleanse, removedKeys);
                                 }
                                 idx++;
                             }
                         }
                     } else {
                         currentEnvelope.setUsagePath(usagePath);
-                        findAndExtractRecursive(fieldValue, fieldKey, currentEnvelope, currentFacets, results, counters);
+                        findAndExtractRecursive(fieldValue, fieldKey, currentEnvelope, currentFacets, results, counters, baseline, fullCleanse, removedKeys);
                     }
                 } else if (fieldKey.toLowerCase().contains("analytics")) {
-                    processAnalyticsNode(fieldValue, fieldKey, currentEnvelope, currentFacets, results, counters);
+                    processAnalyticsNode(fieldValue, fieldKey, currentEnvelope, currentFacets, results, counters, baseline, fullCleanse, removedKeys);
                 } else if (fieldValue.isObject() || fieldValue.isArray()) {
                     currentEnvelope.setUsagePath(usagePath);
-                    findAndExtractRecursive(fieldValue, fieldKey, currentEnvelope, currentFacets, results, counters);
+                    findAndExtractRecursive(fieldValue, fieldKey, currentEnvelope, currentFacets, results, counters, baseline, fullCleanse, removedKeys);
                 }
             });
         } else if (currentNode.isArray()) {
@@ -710,7 +815,7 @@ public class DataIngestionService {
                 newFacets.putAll(parentFacets);
                 newFacets.put("sectionIndex", String.valueOf(i));
                 // When recursing into an array, the parent field name is the one that pointed to the array
-                findAndExtractRecursive(arrayElement, parentFieldName, parentEnvelope, newFacets, results, counters);
+                findAndExtractRecursive(arrayElement, parentFieldName, parentEnvelope, newFacets, results, counters, baseline, fullCleanse, removedKeys);
             }
         }
     }
@@ -776,11 +881,33 @@ public class DataIngestionService {
         return currentFacets;
     }
 
-    private void processContentField(String content, String fieldKey, Envelope envelope, Facets facets, List<Map<String, Object>> results, IngestionCounters counters, boolean isAnalytics) {
+    private void processContentField(String content,
+                                     String fieldKey,
+                                     Envelope envelope,
+                                     Facets facets,
+                                     List<Map<String, Object>> results,
+                                     IngestionCounters counters,
+                                     boolean isAnalytics,
+                                     BaselineIndex baseline,
+                                     boolean fullCleanse,
+                                     Set<String> removedKeys) {
         boolean skipEnrichment = isExcluded(fieldKey);
-        String cleansedContent = cleanseCopyText(content);
         if (isAnalytics) counters.analyticsFound++; else counters.copyFound++;
 
+        String sourcePath = envelope != null ? envelope.getSourcePath() : null;
+        String usagePath = envelope != null ? envelope.getUsagePath() : null;
+        if (!fullCleanse && sourcePath != null && fieldKey != null) {
+            Map<String, Object> baselineItem = baseline.lookup(sourcePath, fieldKey, usagePath, strictUsagePath);
+            if (baselineItem != null) {
+                String baselineOriginal = safeString(baselineItem.get("originalValue"));
+                // If payload hasn't changed, skip cleansing entirely.
+                if (Objects.equals(baselineOriginal, content)) {
+                    return;
+                }
+            }
+        }
+
+        String cleansedContent = cleanseCopyText(content);
         boolean isBlankAfterCleanse = cleansedContent == null || cleansedContent.isBlank();
         boolean keep = cleansedContent != null && (!isBlankAfterCleanse || keepBlankAfterCleanse);
         if (keep && isBlankAfterCleanse) {
@@ -819,6 +946,36 @@ public class DataIngestionService {
             }
             results.add(item);
             if (isAnalytics) counters.analyticsKept++; else counters.copyKept++;
+
+            // Persist latest observed hashes for this key (delta items only)
+            try {
+                String itemType = safeString(item.get("itemType"));
+                String u = safeString(item.get("usagePath"));
+                String newContentHash = safeString(item.get("contentHash"));
+                String newContextHash = safeString(item.get("contextHash"));
+                if (sourcePath != null && itemType != null && newContentHash != null) {
+                    Optional<ContentHash> existingHashOpt =
+                            contentHashRepository.findBySourcePathAndItemTypeAndUsagePath(sourcePath, itemType, u);
+                    if (existingHashOpt.isEmpty() && !strictUsagePath) {
+                        existingHashOpt = contentHashRepository.findBySourcePathAndItemType(sourcePath, itemType);
+                    }
+                    ContentHash hashToSave = existingHashOpt.orElse(new ContentHash(sourcePath, itemType, u, null, null));
+                    hashToSave.setContentHash(newContentHash);
+                    hashToSave.setContextHash(newContextHash);
+                    contentHashRepository.save(hashToSave);
+                }
+            } catch (Exception e) {
+                logger.warn("Failed to persist content/context hash for {} :: {}: {}", sourcePath, fieldKey, e.getMessage());
+            }
+        } else {
+            // If a field existed before but is now blank and we're configured to drop blanks,
+            // treat it as a "deletion" delta so the merged snapshot doesn't keep stale values.
+            if (!fullCleanse && !keepBlankAfterCleanse && isBlankAfterCleanse && sourcePath != null && fieldKey != null) {
+                Map<String, Object> baselineItem = baseline.lookup(sourcePath, fieldKey, usagePath, strictUsagePath);
+                if (baselineItem != null) {
+                    removedKeys.add(buildStableItemKey(sourcePath, fieldKey, usagePath));
+                }
+            }
         }
     }
 
@@ -828,11 +985,12 @@ public class DataIngestionService {
     }
 
     private void processAnalyticsNode(JsonNode node, String fieldKey, Envelope env, Facets facets,
-                                      List<Map<String, Object>> results, IngestionCounters counters) {
+                                      List<Map<String, Object>> results, IngestionCounters counters,
+                                      BaselineIndex baseline, boolean fullCleanse, Set<String> removedKeys) {
         if (node == null || node.isNull()) return;
 
         if (node.isTextual() || node.isNumber() || node.isBoolean()) {
-            processContentField(node.asText(), fieldKey, env, facets, results, counters, true);
+            processContentField(node.asText(), fieldKey, env, facets, results, counters, true, baseline, fullCleanse, removedKeys);
             return;
         }
 
@@ -840,17 +998,17 @@ public class DataIngestionService {
             Envelope analyticsEnvelope = buildCurrentEnvelope(node, env);
             JsonNode valueNode = node.get("value");
             if (valueNode != null && !valueNode.isNull()) {
-                processContentField(valueNode.asText(), fieldKey, analyticsEnvelope, facets, results, counters, true);
+                processContentField(valueNode.asText(), fieldKey, analyticsEnvelope, facets, results, counters, true, baseline, fullCleanse, removedKeys);
             }
             for (String k : List.of("items","children","child")) {
                 JsonNode arr = node.get(k);
                 if (arr != null && arr.isArray()) {
-                    for (JsonNode child : arr) processAnalyticsNode(child, fieldKey, analyticsEnvelope, facets, results, counters);
+                    for (JsonNode child : arr) processAnalyticsNode(child, fieldKey, analyticsEnvelope, facets, results, counters, baseline, fullCleanse, removedKeys);
                 }
             }
             node.fields().forEachRemaining(e -> {
                 if (!List.of("items","children","child","value").contains(e.getKey())) {
-                    processAnalyticsNode(e.getValue(), fieldKey, analyticsEnvelope, facets, results, counters);
+                    processAnalyticsNode(e.getValue(), fieldKey, analyticsEnvelope, facets, results, counters, baseline, fullCleanse, removedKeys);
                 }
             });
             return;
@@ -865,10 +1023,10 @@ public class DataIngestionService {
                     String val  = el.path("value").asText(null);
                     if (val != null && !val.isBlank()) {
                         String key = (name != null && !name.isBlank()) ? "analytics[" + name + "]" : "analytics[" + i + "]";
-                        processContentField(val, key, elEnv, facets, results, counters, true);
+                        processContentField(val, key, elEnv, facets, results, counters, true, baseline, fullCleanse, removedKeys);
                     }
                 } else if (el.isTextual()) {
-                    processContentField(el.asText(), "analytics[" + i + "]", env, facets, results, counters, true);
+                    processContentField(el.asText(), "analytics[" + i + "]", env, facets, results, counters, true, baseline, fullCleanse, removedKeys);
                 }
                 i++;
             }
