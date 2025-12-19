@@ -751,9 +751,7 @@ public class DataIngestionService {
                         && !parentEnvelope.getSourcePath().equals(fragmentPath))
                         ? parentEnvelope.getSourcePath()
                         : null;
-                String usagePath = (containerPath != null)
-                        ? containerPath + USAGE_REF_DELIM + fragmentPath
-                        : fragmentPath;
+                String usagePath = buildUsagePath(containerPath, fragmentPath);
 
                 if (CONTENT_FIELD_KEYS.contains(fieldKey)) {
                     if (fieldValue.isTextual()) {
@@ -763,19 +761,23 @@ public class DataIngestionService {
                         processContentField(fieldValue.asText(), effectiveFieldName, currentEnvelope, currentFacets, results, counters, false, baseline, fullCleanse, removedKeys);// copy object
                     } else if (fieldValue.isObject() && fieldValue.has("copy") && fieldValue.get("copy").isTextual()) {
                         Envelope contentEnv = buildCurrentEnvelope(fieldValue, currentEnvelope);
-                        contentEnv.setUsagePath(usagePath);
+                        // Important: use the nested object's own _path for occurrence identity.
+                        String nestedFragmentPath = contentEnv.getSourcePath();
+                        contentEnv.setUsagePath(buildUsagePath(containerPath, nestedFragmentPath));
                         processContentField(fieldValue.get("copy").asText(), fieldKey, contentEnv, currentFacets, results, counters, false, baseline, fullCleanse, removedKeys);
 
                         // text object
                     } else if (fieldValue.isObject() && fieldValue.has("text") && fieldValue.get("text").isTextual()) {
                         Envelope contentEnv = buildCurrentEnvelope(fieldValue, currentEnvelope);
-                        contentEnv.setUsagePath(usagePath);
+                        String nestedFragmentPath = contentEnv.getSourcePath();
+                        contentEnv.setUsagePath(buildUsagePath(containerPath, nestedFragmentPath));
                         processContentField(fieldValue.get("text").asText(), fieldKey, contentEnv, currentFacets, results, counters, false, baseline, fullCleanse, removedKeys);
 
                         // url object (string value)
                     } else if (fieldValue.isObject() && fieldValue.has("url") && fieldValue.get("url").isTextual()) {
                         Envelope contentEnv = buildCurrentEnvelope(fieldValue, currentEnvelope);
-                        contentEnv.setUsagePath(usagePath);
+                        String nestedFragmentPath = contentEnv.getSourcePath();
+                        contentEnv.setUsagePath(buildUsagePath(containerPath, nestedFragmentPath));
                         processContentField(fieldValue.get("url").asText(), fieldKey, contentEnv, currentFacets, results, counters, false, baseline, fullCleanse, removedKeys);
                     }
 //                    else if (fieldValue.isObject() && fieldValue.has("copy") && fieldValue.get("copy").isTextual()) {
@@ -798,9 +800,11 @@ public class DataIngestionService {
                                     int itemIndex = 0;
                                     for (JsonNode item : element.get("items")) {
                                         if (item.isObject() && item.has("copy") && item.get("copy").isTextual()) {
-                                            currentEnvelope.setUsagePath(usagePath);
+                                            Envelope itemEnv = buildCurrentEnvelope(item, currentEnvelope);
+                                            String itemFrag = itemEnv.getSourcePath();
+                                            itemEnv.setUsagePath(buildUsagePath(containerPath, itemFrag));
                                             String uniqueFieldName = "disclaimer[" + groupIndex + "][" + itemIndex + "]";
-                                            processContentField(item.get("copy").asText(), uniqueFieldName, currentEnvelope, currentFacets, results, counters, false, baseline, fullCleanse, removedKeys);
+                                            processContentField(item.get("copy").asText(), uniqueFieldName, itemEnv, currentFacets, results, counters, false, baseline, fullCleanse, removedKeys);
                                         }
                                         itemIndex++;
                                     }
@@ -814,8 +818,10 @@ public class DataIngestionService {
                                     currentEnvelope.setUsagePath(usagePath);
                                     processContentField(element.asText(), fieldKey + "[" + idx + "]", currentEnvelope, currentFacets, results, counters, false, baseline, fullCleanse, removedKeys);
                                 } else if (element.isObject() && element.has("copy") && element.get("copy").isTextual()) {
-                                    currentEnvelope.setUsagePath(usagePath);
-                                    processContentField(element.get("copy").asText(), fieldKey + "[" + idx + "]", currentEnvelope, currentFacets, results, counters, false, baseline, fullCleanse, removedKeys);
+                                    Envelope elementEnv = buildCurrentEnvelope(element, currentEnvelope);
+                                    String elFrag = elementEnv.getSourcePath();
+                                    elementEnv.setUsagePath(buildUsagePath(containerPath, elFrag));
+                                    processContentField(element.get("copy").asText(), fieldKey + "[" + idx + "]", elementEnv, currentFacets, results, counters, false, baseline, fullCleanse, removedKeys);
                                 }
                                 idx++;
                             }
@@ -841,6 +847,16 @@ public class DataIngestionService {
                 findAndExtractRecursive(arrayElement, parentFieldName, parentEnvelope, newFacets, results, counters, baseline, fullCleanse, removedKeys);
             }
         }
+    }
+
+    private String buildUsagePath(@Nullable String containerPath, @Nullable String fragmentPath) {
+        if (fragmentPath == null) {
+            return null;
+        }
+        if (containerPath == null || containerPath.isBlank() || containerPath.equals(fragmentPath)) {
+            return fragmentPath;
+        }
+        return containerPath + USAGE_REF_DELIM + fragmentPath;
     }
 
 
