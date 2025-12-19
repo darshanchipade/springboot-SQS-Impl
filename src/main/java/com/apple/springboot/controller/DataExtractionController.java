@@ -28,6 +28,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.*;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api")
@@ -227,6 +228,59 @@ public class DataExtractionController {
                 .toList();
 
         return ResponseEntity.ok(new CleansedItemsResponse(rows));
+    }
+
+    @Operation(
+            summary = "Get cleansed items stats (counts + duplicates)",
+            description = "Returns counts for total extracted items, unique (sourcePath,field) pairs, and duplicate breakdown for a cleansedDataStoreId."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Stats retrieved successfully"),
+            @ApiResponse(responseCode = "404", description = "Cleansed data record not found")
+    })
+    @GetMapping("/cleansed-items/{id}/stats")
+    public ResponseEntity<?> getCleansedItemsStats(
+            @Parameter(description = "UUID of the cleansed data entry", required = true)
+            @PathVariable UUID id) {
+
+        Optional<CleansedDataStore> storeOpt = cleansedDataStoreRepository.findById(id);
+        if (storeOpt.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("error", "CleansedDataStore not found for id " + id));
+        }
+
+        CleansedDataStore store = storeOpt.get();
+        List<Map<String, Object>> items = Optional.ofNullable(store.getCleansedItems()).orElse(List.of());
+        int total = items.size();
+
+        Map<String, Long> counts = items.stream()
+                .filter(Objects::nonNull)
+                .map(item -> {
+                    Object sp = item.get("sourcePath");
+                    Object fn = item.get("originalFieldName");
+                    if (!(sp instanceof String) || !(fn instanceof String)) {
+                        return null;
+                    }
+                    return sp + "::" + fn;
+                })
+                .filter(Objects::nonNull)
+                .collect(Collectors.groupingBy(Function.identity(), LinkedHashMap::new, Collectors.counting()));
+
+        long uniqueKeys = counts.size();
+        long duplicateKeys = counts.values().stream().filter(v -> v > 1).count();
+        long duplicateItemsBeyondFirst = counts.values().stream().filter(v -> v > 1).mapToLong(v -> v - 1).sum();
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("cleansedDataStoreId", id.toString());
+        body.put("sourceUri", store.getSourceUri());
+        body.put("version", store.getVersion());
+        body.put("totalExtractedItems", total);
+        body.put("uniqueSourcePathFieldPairs", uniqueKeys);
+        body.put("duplicateKeys", duplicateKeys);
+        body.put("duplicateItemsBeyondFirst", duplicateItemsBeyondFirst);
+        body.put("expectedMaxEnrichedRowsForThisRun", uniqueKeys);
+
+        return ResponseEntity.ok(body);
     }
 
     private static class ItemRowMapper implements Function<Map<String, Object>, CleansedItemRow> {
