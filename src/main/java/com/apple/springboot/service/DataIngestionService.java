@@ -576,16 +576,24 @@ public class DataIngestionService {
         if (rawDataStore == null || rawDataStore.getSourceUri() == null) {
             return null;
         }
-        Optional<CleansedDataStore> baselineOpt = cleansedDataStoreRepository.findTopBySourceUriOrderByCleansedAtDesc(rawDataStore.getSourceUri());
-        if (baselineOpt.isEmpty()) {
+
+        // Baseline should come ONLY from a previous raw-data version of the same sourceUri.
+        // This ensures "version=1" behaves as a true fresh run (full cleanse + full enrichment),
+        // even if some stale CleansedDataStore rows exist for the same sourceUri.
+        Integer currentVersion = rawDataStore.getVersion();
+        if (currentVersion == null || currentVersion <= 1) {
             return null;
         }
-        CleansedDataStore baseline = baselineOpt.get();
-        // Avoid self-selection in odd replay scenarios
-        if (rawDataStore.getId() != null && rawDataStore.getId().equals(baseline.getRawDataId())) {
+
+        Optional<RawDataStore> prevRawOpt = rawDataStoreRepository
+                .findTopBySourceUriAndVersionLessThanOrderByVersionDesc(rawDataStore.getSourceUri(), currentVersion);
+        if (prevRawOpt.isEmpty()) {
             return null;
         }
-        return baseline;
+
+        return cleansedDataStoreRepository
+                .findTopByRawDataIdOrderByCleansedAtDesc(prevRawOpt.get().getId())
+                .orElse(null);
     }
 
     private List<Map<String, Object>> mergeBaselineWithDeltas(
