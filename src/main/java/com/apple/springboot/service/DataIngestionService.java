@@ -599,13 +599,17 @@ public class DataIngestionService {
                 String key = buildStableItemKey(item);
                 if (key == null) continue;
                 if (removedKeys.contains(key)) continue;
-                merged.putIfAbsent(key, item);
+                // Carry-forward items are not deltas; ensure they don't trigger enrichment.
+                Map<String, Object> carried = new HashMap<>(item);
+                carried.put("delta", false);
+                merged.putIfAbsent(key, carried);
             }
         }
         for (Map<String, Object> delta : deltas) {
             if (delta == null) continue;
             String key = buildStableItemKey(delta);
             if (key == null) continue;
+            delta.put("delta", true);
             merged.put(key, delta);
         }
         return new ArrayList<>(merged.values());
@@ -896,6 +900,7 @@ public class DataIngestionService {
 
         String sourcePath = envelope != null ? envelope.getSourcePath() : null;
         String usagePath = envelope != null ? envelope.getUsagePath() : null;
+        boolean isDelta = fullCleanse;
         if (!fullCleanse && sourcePath != null && fieldKey != null) {
             Map<String, Object> baselineItem = baseline.lookup(sourcePath, fieldKey, usagePath, strictUsagePath);
             if (baselineItem != null) {
@@ -904,6 +909,9 @@ public class DataIngestionService {
                 if (Objects.equals(baselineOriginal, content)) {
                     return;
                 }
+                isDelta = true;
+            } else {
+                isDelta = true;
             }
         }
 
@@ -937,6 +945,7 @@ public class DataIngestionService {
             item.put("skipEnrichment", skipEnrichment);
             item.put("originalValue", content);
             item.put("cleansedValue", cleansedContent);
+            item.put("delta", isDelta);
             try {
                 item.put("context", objectMapper.convertValue(finalContext, new com.fasterxml.jackson.core.type.TypeReference<>() {}));
                 // Ensure stable property and map ordering when hashing

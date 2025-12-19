@@ -16,6 +16,7 @@ public interface EnrichedContentElementRepository extends JpaRepository<Enriched
     List<EnrichedContentElement> findAllByCleansedDataId(UUID cleansedDataId);
     boolean existsByItemSourcePathAndItemOriginalFieldNameAndStatus(String sourcePath, String fieldName, String status);
     boolean existsByItemSourcePathAndItemOriginalFieldNameAndCleansedText(String sourcePath, String fieldName, String cleansedText);
+    boolean existsByItemUsagePathAndItemOriginalFieldNameAndCleansedText(String usagePath, String fieldName, String cleansedText);
     boolean existsByCleansedDataIdAndItemSourcePathAndItemOriginalFieldNameAndCleansedText(UUID cleansedDataId, String sourcePath, String fieldName, String cleansedText);
     boolean existsByCleansedDataIdAndItemSourcePathAndItemOriginalFieldNameAndStatus(UUID cleansedDataId, String sourcePath, String fieldName, String status);
 
@@ -24,6 +25,7 @@ public interface EnrichedContentElementRepository extends JpaRepository<Enriched
      * This is the correct method signature.
      */
     Optional<EnrichedContentElement> findByCleansedDataIdAndItemSourcePathAndItemOriginalFieldName(UUID cleansedDataId, String sourcePath, String fieldName);
+    Optional<EnrichedContentElement> findByCleansedDataIdAndItemUsagePathAndItemOriginalFieldName(UUID cleansedDataId, String usagePath, String fieldName);
     List<EnrichedContentElement> findByCleansedDataIdOrderByEnrichedAtAsc(UUID cleansedDataId);
 
 }

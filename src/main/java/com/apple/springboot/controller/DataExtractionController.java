@@ -256,12 +256,16 @@ public class DataExtractionController {
         Map<String, Long> counts = items.stream()
                 .filter(Objects::nonNull)
                 .map(item -> {
+                    Object up = item.get("usagePath");
                     Object sp = item.get("sourcePath");
                     Object fn = item.get("originalFieldName");
-                    if (!(sp instanceof String) || !(fn instanceof String)) {
+                    String base = (up instanceof String u && !u.isBlank())
+                            ? u
+                            : (sp instanceof String s ? s : null);
+                    if (base == null || !(fn instanceof String)) {
                         return null;
                     }
-                    return sp + "::" + fn;
+                    return base + "::" + fn;
                 })
                 .filter(Objects::nonNull)
                 .collect(Collectors.groupingBy(Function.identity(), LinkedHashMap::new, Collectors.counting()));
@@ -270,14 +274,25 @@ public class DataExtractionController {
         long duplicateKeys = counts.values().stream().filter(v -> v > 1).count();
         long duplicateItemsBeyondFirst = counts.values().stream().filter(v -> v > 1).mapToLong(v -> v - 1).sum();
 
+        long deltaItems = items.stream()
+                .filter(Objects::nonNull)
+                .filter(m -> {
+                    Object d = m.get("delta");
+                    if (d instanceof Boolean b) return b;
+                    if (d instanceof String s) return Boolean.parseBoolean(s);
+                    return false;
+                })
+                .count();
+
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("cleansedDataStoreId", id.toString());
         body.put("sourceUri", store.getSourceUri());
         body.put("version", store.getVersion());
         body.put("totalExtractedItems", total);
-        body.put("uniqueSourcePathFieldPairs", uniqueKeys);
+        body.put("uniqueOccurrenceFieldPairs", uniqueKeys);
         body.put("duplicateKeys", duplicateKeys);
         body.put("duplicateItemsBeyondFirst", duplicateItemsBeyondFirst);
+        body.put("deltaItems", deltaItems);
         body.put("expectedMaxEnrichedRowsForThisRun", uniqueKeys);
 
         return ResponseEntity.ok(body);
