@@ -522,10 +522,21 @@ public class DataIngestionService {
             List<Map<String, Object>> itemsToStore = fullCleanse
                     ? deltaItems
                     : mergeBaselineWithDeltas(
-                    baseline != null ? baseline.getCleansedItems() : null,
-                    deltaItems,
-                    removedKeys
-            );
+                            baseline != null ? baseline.getCleansedItems() : null,
+                            deltaItems,
+                            removedKeys
+                    );
+
+            // Safety: if this is effectively a "fresh run" (no prior version),
+            // force all extracted items to be treated as deltas so enrichment processes all occurrences.
+            Integer v = rawDataStore.getVersion();
+            if (v == null || v <= 1) {
+                for (Map<String, Object> item : itemsToStore) {
+                    if (item != null) {
+                        item.put("delta", true);
+                    }
+                }
+            }
 
             if (debugCountersEnabled) {
                 long keptPreFilterCopy = counters.copyKept;
