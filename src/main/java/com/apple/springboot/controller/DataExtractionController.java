@@ -363,6 +363,7 @@ public class DataExtractionController {
                 cleansed = pickString(item.get("cleansedContent"));
             }
             row.setCleansed(cleansed);
+            row.setDelta(pickBoolean(item.get("delta")));
             return row;
         }
 
@@ -378,6 +379,12 @@ public class DataExtractionController {
 
         private String pickString(Object value) {
             return value instanceof String ? (String) value : null;
+        }
+
+        private Boolean pickBoolean(Object value) {
+            if (value instanceof Boolean b) return b;
+            if (value instanceof String s) return Boolean.parseBoolean(s);
+            return null;
         }
     }
 
