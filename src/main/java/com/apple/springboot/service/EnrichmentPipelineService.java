@@ -103,7 +103,7 @@ public class EnrichmentPipelineService {
 
         // Filter to only items that need enrichment (text changed)
         List<CleansedItemDetail> changedItems = itemsToEnrich.stream()
-                .filter(itemDetail -> !alreadyEnrichedSameOccurrenceText(itemDetail))
+                .filter(itemDetail -> !alreadyEnrichedSameOccurrenceText(cleansedDataEntry.getSourceUri(), itemDetail))
                 .collect(Collectors.toList());
 
         logger.info("After change-detection filtering, {} items remain for processing (CleansedDataStore ID {}).",
@@ -283,18 +283,23 @@ public class EnrichmentPipelineService {
         return base + "::" + detail.originalFieldName;
     }
 
-    private boolean alreadyEnrichedSameOccurrenceText(CleansedItemDetail detail) {
+    /**
+     * Returns true if we have already enriched the same occurrence+field with the exact same cleansed text
+     * for the same sourceUri. This prevents cross-source collisions where multiple ingestions share the
+     * same (usagePath/sourcePath, field) identifiers.
+     */
+    private boolean alreadyEnrichedSameOccurrenceText(String sourceUri, CleansedItemDetail detail) {
         String field = detail.originalFieldName;
         String text = detail.cleansedContent;
-        if (field == null || text == null) {
+        if (sourceUri == null || sourceUri.isBlank() || field == null || text == null) {
             return false;
         }
         if (detail.usagePath != null && !detail.usagePath.isBlank()) {
             return enrichedContentElementRepository
-                    .existsByItemUsagePathAndItemOriginalFieldNameAndCleansedText(detail.usagePath, field, text);
+                    .existsBySourceUriAndItemUsagePathAndItemOriginalFieldNameAndCleansedText(sourceUri, detail.usagePath, field, text);
         }
         return enrichedContentElementRepository
-                .existsByItemSourcePathAndItemOriginalFieldNameAndCleansedText(detail.sourcePath, field, text);
+                .existsBySourceUriAndItemSourcePathAndItemOriginalFieldNameAndCleansedText(sourceUri, detail.sourcePath, field, text);
     }
 
     private boolean extractSkipFlag(Object flag) {

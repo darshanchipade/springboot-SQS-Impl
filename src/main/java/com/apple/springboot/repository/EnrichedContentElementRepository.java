@@ -17,6 +17,8 @@ public interface EnrichedContentElementRepository extends JpaRepository<Enriched
     boolean existsByItemSourcePathAndItemOriginalFieldNameAndStatus(String sourcePath, String fieldName, String status);
     boolean existsByItemSourcePathAndItemOriginalFieldNameAndCleansedText(String sourcePath, String fieldName, String cleansedText);
     boolean existsByItemUsagePathAndItemOriginalFieldNameAndCleansedText(String usagePath, String fieldName, String cleansedText);
+    boolean existsBySourceUriAndItemSourcePathAndItemOriginalFieldNameAndCleansedText(String sourceUri, String sourcePath, String fieldName, String cleansedText);
+    boolean existsBySourceUriAndItemUsagePathAndItemOriginalFieldNameAndCleansedText(String sourceUri, String usagePath, String fieldName, String cleansedText);
     boolean existsByCleansedDataIdAndItemSourcePathAndItemOriginalFieldNameAndCleansedText(UUID cleansedDataId, String sourcePath, String fieldName, String cleansedText);
     boolean existsByCleansedDataIdAndItemSourcePathAndItemOriginalFieldNameAndStatus(UUID cleansedDataId, String sourcePath, String fieldName, String status);
 
