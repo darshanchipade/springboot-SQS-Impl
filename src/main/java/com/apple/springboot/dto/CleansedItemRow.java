@@ -5,6 +5,7 @@ public class CleansedItemRow {
     private String field;
     private String original;
     private String cleansed;
+    private Boolean delta;
 
     public String getField() {
         return field;
@@ -36,6 +37,14 @@ public class CleansedItemRow {
 
     public void setId(String id) {
         this.id = id;
+    }
+
+    public Boolean getDelta() {
+        return delta;
+    }
+
+    public void setDelta(Boolean delta) {
+        this.delta = delta;
     }
 // getters/setters omitted for brevity
 }

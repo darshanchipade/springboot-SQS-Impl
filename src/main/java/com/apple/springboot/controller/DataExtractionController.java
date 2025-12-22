@@ -140,9 +140,16 @@ public class DataExtractionController {
     @PostMapping("/ingest-json-payload")
     public ResponseEntity<String> ingestJsonPayload(
             @Parameter(description = "JSON payload to ingest and process", required = true)
-            @RequestBody String jsonPayload) {
-        String sourceIdentifier = "api-payload-" + UUID.randomUUID().toString();
-        logger.info("Received POST request to process JSON payload. Assigned sourceIdentifier: {}", sourceIdentifier);
+            @RequestBody String jsonPayload,
+            @Parameter(description = "Stable identifier for this content source. " +
+                    "Use the same value across edits to enable delta-only cleansing/enrichment. " +
+                    "If omitted, a random identifier is generated and each call is treated as a fresh source.")
+            @RequestParam(value = "sourceIdentifier", required = false) String sourceIdentifier) {
+
+        if (sourceIdentifier == null || sourceIdentifier.isBlank()) {
+            sourceIdentifier = "api-payload-" + UUID.randomUUID();
+        }
+        logger.info("Received POST request to process JSON payload. sourceIdentifier={}", sourceIdentifier);
         CleansedDataStore cleansedDataEntry = null;
 
         try {
@@ -161,6 +168,44 @@ public class DataExtractionController {
         } catch (Exception e) {
             logger.error("Error processing JSON payload for identifier: {}. Error: {}", sourceIdentifier, e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Error processing JSON payload "+ sourceIdentifier + ": " + e.getMessage());
+        }
+    }
+
+    @Operation(
+            summary = "Ingest JSON payload (stable source identifier path param)",
+            description = "Same as POST /api/ingest-json-payload, but the sourceIdentifier is provided as a path parameter. " +
+                    "Using a stable sourceIdentifier across edits enables delta-only cleansing/enrichment."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "202", description = "Request accepted - enrichment processing initiated in background"),
+            @ApiResponse(responseCode = "200", description = "Source processed successfully but no content extracted for enrichment"),
+            @ApiResponse(responseCode = "400", description = "Bad request - JSON payload is empty or invalid"),
+            @ApiResponse(responseCode = "422", description = "Unprocessable entity - ingestion/cleansing failed"),
+            @ApiResponse(responseCode = "417", description = "Expectation failed - cannot proceed to enrichment"),
+            @ApiResponse(responseCode = "500", description = "Internal server error")
+    })
+    @PostMapping("/ingest-json-payload/{sourceIdentifier}")
+    public ResponseEntity<String> ingestJsonPayloadWithSource(
+            @Parameter(description = "Stable identifier for this content source (reuse across edits).", required = true)
+            @PathVariable("sourceIdentifier") String sourceIdentifier,
+            @Parameter(description = "JSON payload to ingest and process", required = true)
+            @RequestBody String jsonPayload) {
+        logger.info("Received POST request to process JSON payload. sourceIdentifier={}", sourceIdentifier);
+        CleansedDataStore cleansedDataEntry = null;
+        try {
+            if (jsonPayload == null || jsonPayload.trim().isEmpty()) {
+                logger.warn("Received empty JSON payload for identifier: {}", sourceIdentifier);
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("JSON payload cannot be empty.");
+            }
+            cleansedDataEntry = dataIngestionService.ingestAndCleanseJsonPayload(jsonPayload, sourceIdentifier);
+            return handleCleansingOutcome(cleansedDataEntry, sourceIdentifier);
+        } catch (IllegalArgumentException e) {
+            logger.error("Invalid argument processing JSON payload for identifier: {}. Error: {}", sourceIdentifier, e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body("Invalid argument for payload " + sourceIdentifier + ": " + e.getMessage());
+        } catch (Exception e) {
+            logger.error("Error processing JSON payload for identifier: {}. Error: {}", sourceIdentifier, e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Error processing JSON payload " + sourceIdentifier + ": " + e.getMessage());
         }
     }
     @Operation(
@@ -318,6 +363,7 @@ public class DataExtractionController {
                 cleansed = pickString(item.get("cleansedContent"));
             }
             row.setCleansed(cleansed);
+            row.setDelta(pickBoolean(item.get("delta")));
             return row;
         }
 
@@ -333,6 +379,12 @@ public class DataExtractionController {
 
         private String pickString(Object value) {
             return value instanceof String ? (String) value : null;
+        }
+
+        private Boolean pickBoolean(Object value) {
+            if (value instanceof Boolean b) return b;
+            if (value instanceof String s) return Boolean.parseBoolean(s);
+            return null;
         }
     }
 
