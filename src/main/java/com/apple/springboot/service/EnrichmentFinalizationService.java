@@ -73,10 +73,15 @@ public class EnrichmentFinalizationService {
                 return true;
             }
         }
-        if ("FINALIZING".equalsIgnoreCase(cleansedDataEntry.getStatus())) {
+        // Re-check the persisted status to avoid misleading logs from a stale entity instance.
+        String persistedStatus = cleansedDataStoreRepository.findById(id)
+                .map(CleansedDataStore::getStatus)
+                .orElse(cleansedDataEntry.getStatus());
+        if ("FINALIZING".equalsIgnoreCase(persistedStatus)) {
+            cleansedDataEntry.setStatus(persistedStatus);
             return true;
         }
-        logger.info("Another instance is finalizing CleansedDataStore ID {}. Current status: {}", id, cleansedDataEntry.getStatus());
+        logger.info("Could not acquire finalization lock for CleansedDataStore ID {}. Current status: {}", id, persistedStatus);
         return false;
     }
 

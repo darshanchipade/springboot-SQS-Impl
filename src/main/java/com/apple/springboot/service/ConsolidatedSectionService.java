@@ -39,11 +39,13 @@ public class ConsolidatedSectionService {
 
     @Transactional
     public void saveFromCleansedEntry(CleansedDataStore cleansedData) {
-        // Build an index of all usagePaths per (sourcePath, originalFieldName) from the cleansed items
-        Map<String, Set<String>> usageIndex = buildUsageIndex(cleansedData);
-
         List<EnrichedContentElement> enrichedItems = enrichedRepo.findAllByCleansedDataId(cleansedData.getId());
         logger.info("Found {} enriched items for CleansedDataStore ID: {} to consolidate.", enrichedItems.size(), cleansedData.getId());
+
+        // Build an index of all usagePaths per (sourcePath, originalFieldName). We prefer harvesting from
+        // persisted `content_hashes` so consolidation remains correct even when `cleansed_items` only contains deltas.
+        Map<String, Set<String>> usageIndex = buildUsageIndex(cleansedData, enrichedItems);
+
         List<Object[]> counts = entityManager.createNativeQuery(
                         "select status, count(*) from enriched_content_elements where cleansed_data_id = :id group by status")
                 .setParameter("id", cleansedData.getId())
@@ -142,19 +144,51 @@ public class ConsolidatedSectionService {
         return new String[]{left.isEmpty() ? null : left, right.isEmpty() ? null : right};
     }
 
-    private Map<String, Set<String>> buildUsageIndex(CleansedDataStore cleansedData) {
+    private Map<String, Set<String>> buildUsageIndex(CleansedDataStore cleansedData,
+                                                     List<EnrichedContentElement> enrichedItems) {
         Map<String, Set<String>> index = new HashMap<>();
-        if (cleansedData == null || cleansedData.getCleansedItems() == null) return index;
-        for (Map<String, Object> item : cleansedData.getCleansedItems()) {
-            try {
-                String sourcePath = (String) item.get("sourcePath");
-                String originalFieldName = (String) item.get("originalFieldName");
-                String usagePath = (String) item.get("usagePath");
-                if (sourcePath == null || originalFieldName == null || usagePath == null) continue;
-                String key = usageKey(sourcePath, originalFieldName);
-                index.computeIfAbsent(key, k -> new HashSet<>()).add(usagePath);
-            } catch (ClassCastException ignored) { /* skip malformed entries */ }
+
+        // 1) Always include whatever was stored on the cleansed record (could be full or delta).
+        if (cleansedData != null && cleansedData.getCleansedItems() != null) {
+            for (Map<String, Object> item : cleansedData.getCleansedItems()) {
+                try {
+                    String sourcePath = (String) item.get("sourcePath");
+                    String originalFieldName = (String) item.get("originalFieldName");
+                    String usagePath = (String) item.get("usagePath");
+                    if (sourcePath == null || originalFieldName == null || usagePath == null) continue;
+                    index.computeIfAbsent(usageKey(sourcePath, originalFieldName), k -> new HashSet<>()).add(usagePath);
+                } catch (ClassCastException ignored) { /* skip malformed entries */ }
+            }
         }
+
+        // 2) Backfill the full fan-out from `content_hashes` for all enriched items (covers delta-cleansed runs).
+        if (enrichedItems == null || enrichedItems.isEmpty()) {
+            return index;
+        }
+
+        Set<String> seenPairs = new HashSet<>();
+        for (EnrichedContentElement item : enrichedItems) {
+            String sourcePath = item.getItemSourcePath();
+            String fieldName = item.getItemOriginalFieldName();
+            if (sourcePath == null || fieldName == null) {
+                continue;
+            }
+            String pairKey = usageKey(sourcePath, fieldName);
+            if (!seenPairs.add(pairKey)) {
+                continue;
+            }
+            try {
+                contentHashRepository.findAllBySourcePathAndItemType(sourcePath, fieldName).stream()
+                        .map(ch -> ch.getUsagePath())
+                        .filter(Objects::nonNull)
+                        .filter(s -> !s.isBlank())
+                        .forEach(up -> index.computeIfAbsent(pairKey, k -> new HashSet<>()).add(up));
+            } catch (Exception e) {
+                logger.debug("Unable to backfill usage paths from content_hashes for {}::{}, falling back to element context.",
+                        sourcePath, fieldName, e);
+            }
+        }
+
         return index;
     }
 

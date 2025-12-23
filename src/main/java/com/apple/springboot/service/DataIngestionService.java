@@ -71,7 +71,7 @@ public class DataIngestionService {
     private boolean keepBlankAfterCleanse;
 
     // If true, bypass change filter and return all extracted items
-    @Value("${app.ingestion.return-all-items:true}")
+    @Value("${app.ingestion.return-all-items:false}")
     private boolean returnAllItems;
 
     // If true, include contextHash in change detection
@@ -503,8 +503,23 @@ public class DataIngestionService {
             IngestionCounters counters = new IngestionCounters();
             findAndExtractRecursive(rootNode, "#", rootEnvelope, new Facets(), allExtractedItems, counters);
 
-            List<Map<String, Object>> itemsToProcess =
-                    returnAllItems ? allExtractedItems : filterForChangedItems(allExtractedItems);
+            // Treat version=1 as a "fresh" run for this sourceUri and return all items.
+            // This guards against cases where supporting tables (like content_hashes) were not cleared,
+            // but the ingestion run itself is brand new (e.g., DB truncation of raw/cleansed tables).
+            boolean forceFullRun = rawDataStore.getVersion() != null && rawDataStore.getVersion() == 1;
+            if (forceFullRun && !returnAllItems) {
+                logger.info("Version=1 detected for source {}. Forcing full cleanse output (ignoring delta filter for this run).",
+                        rawDataStore.getSourceUri());
+            }
+
+            List<Map<String, Object>> itemsToProcess;
+            if (returnAllItems || forceFullRun) {
+                // Still persist the latest observed hashes so subsequent runs can correctly compute deltas.
+                filterForChangedItems(allExtractedItems);
+                itemsToProcess = allExtractedItems;
+            } else {
+                itemsToProcess = filterForChangedItems(allExtractedItems);
+            }
 
             if (debugCountersEnabled) {
                 long keptPreFilterCopy = counters.copyKept;
@@ -545,7 +560,35 @@ public class DataIngestionService {
     }
 
     private List<Map<String, Object>> filterForChangedItems(List<Map<String, Object>> allItems) {
+        if (allItems == null || allItems.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        // PERF: bulk-load existing hashes to avoid N queries per run.
+        Set<String> sourcePaths = new HashSet<>();
+        for (Map<String, Object> item : allItems) {
+            String sourcePath = (String) item.get("sourcePath");
+            if (sourcePath != null) {
+                sourcePaths.add(sourcePath);
+            }
+        }
+
+        Map<String, ContentHash> exactIndex = new HashMap<>();
+        Map<String, ContentHash> legacyIndex = new HashMap<>();
+        if (!sourcePaths.isEmpty()) {
+            List<ContentHash> existing = contentHashRepository.findAllBySourcePathIn(new ArrayList<>(sourcePaths));
+            for (ContentHash hash : existing) {
+                if (hash.getSourcePath() == null || hash.getItemType() == null) {
+                    continue;
+                }
+                legacyIndex.put(legacyKey(hash.getSourcePath(), hash.getItemType()), hash);
+                exactIndex.put(exactKey(hash.getSourcePath(), hash.getItemType(), hash.getUsagePath()), hash);
+            }
+        }
+
         List<Map<String, Object>> changedItems = new ArrayList<>();
+        Map<String, ContentHash> hashesToPersist = new LinkedHashMap<>();
+
         for (Map<String, Object> item : allItems) {
             String sourcePath = (String) item.get("sourcePath");
             String itemType = (String) item.get("itemType");
@@ -555,30 +598,44 @@ public class DataIngestionService {
 
             if (sourcePath == null || itemType == null) continue;
 
-            Optional<ContentHash> existingHashOpt =
-                    contentHashRepository.findBySourcePathAndItemTypeAndUsagePath(sourcePath, itemType, usagePath);
-            if (existingHashOpt.isEmpty() && !strictUsagePath) {
-                existingHashOpt = contentHashRepository.findBySourcePathAndItemType(sourcePath, itemType);
-                if (existingHashOpt.isPresent()) {
+            ContentHash existingHash = exactIndex.get(exactKey(sourcePath, itemType, usagePath));
+            if (existingHash == null && !strictUsagePath) {
+                existingHash = legacyIndex.get(legacyKey(sourcePath, itemType));
+                if (existingHash != null) {
                     logger.debug("Change detection fallback matched by (sourcePath,itemType) without usagePath for {} :: {}", sourcePath, itemType);
                 }
             }
 
-            boolean contentChanged = existingHashOpt.isEmpty()
-                    || !Objects.equals(existingHashOpt.get().getContentHash(), newContentHash);
-            boolean contextChanged = considerContextChange && (existingHashOpt.isEmpty()
-                    || !Objects.equals(existingHashOpt.get().getContextHash(), newContextHash));
+            boolean contentChanged = existingHash == null
+                    || !Objects.equals(existingHash.getContentHash(), newContentHash);
+            boolean contextChanged = considerContextChange && (existingHash == null
+                    || !Objects.equals(existingHash.getContextHash(), newContextHash));
 
-            if (existingHashOpt.isEmpty() || contentChanged || contextChanged) {
+            if (existingHash == null || contentChanged || contextChanged) {
                 changedItems.add(item);
             }
-            // Always persist latest observed hashes for this key
-            ContentHash hashToSave = existingHashOpt.orElse(new ContentHash(sourcePath, itemType, usagePath, null, null));
+
+            ContentHash hashToSave = existingHash != null
+                    ? existingHash
+                    : new ContentHash(sourcePath, itemType, usagePath, null, null);
             hashToSave.setContentHash(newContentHash);
             hashToSave.setContextHash(newContextHash);
-            contentHashRepository.save(hashToSave);
+            hashesToPersist.put(exactKey(sourcePath, itemType, usagePath), hashToSave);
         }
+
+        if (!hashesToPersist.isEmpty()) {
+            contentHashRepository.saveAll(hashesToPersist.values());
+        }
+
         return changedItems;
+    }
+
+    private String exactKey(String sourcePath, String itemType, String usagePath) {
+        return sourcePath + "\u0001" + itemType + "\u0001" + (usagePath == null ? "" : usagePath);
+    }
+
+    private String legacyKey(String sourcePath, String itemType) {
+        return sourcePath + "\u0001" + itemType;
     }
 
     private CleansedDataStore createCleansedDataStore(List<Map<String, Object>> items, RawDataStore rawData) {
