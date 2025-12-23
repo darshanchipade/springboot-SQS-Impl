@@ -503,8 +503,23 @@ public class DataIngestionService {
             IngestionCounters counters = new IngestionCounters();
             findAndExtractRecursive(rootNode, "#", rootEnvelope, new Facets(), allExtractedItems, counters);
 
-            List<Map<String, Object>> itemsToProcess =
-                    returnAllItems ? allExtractedItems : filterForChangedItems(allExtractedItems);
+            // Treat version=1 as a "fresh" run for this sourceUri and return all items.
+            // This guards against cases where supporting tables (like content_hashes) were not cleared,
+            // but the ingestion run itself is brand new (e.g., DB truncation of raw/cleansed tables).
+            boolean forceFullRun = rawDataStore.getVersion() != null && rawDataStore.getVersion() == 1;
+            if (forceFullRun && !returnAllItems) {
+                logger.info("Version=1 detected for source {}. Forcing full cleanse output (ignoring delta filter for this run).",
+                        rawDataStore.getSourceUri());
+            }
+
+            List<Map<String, Object>> itemsToProcess;
+            if (returnAllItems || forceFullRun) {
+                // Still persist the latest observed hashes so subsequent runs can correctly compute deltas.
+                filterForChangedItems(allExtractedItems);
+                itemsToProcess = allExtractedItems;
+            } else {
+                itemsToProcess = filterForChangedItems(allExtractedItems);
+            }
 
             if (debugCountersEnabled) {
                 long keptPreFilterCopy = counters.copyKept;
