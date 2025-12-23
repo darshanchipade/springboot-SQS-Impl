@@ -171,7 +171,9 @@ public class EnrichmentPipelineService {
             // finalization steps (consolidation + embedding markers + final status) so downstream
             // reads don't end up with empty consolidated tables.
             try {
-                enrichmentProcessor.runFinalizationSteps(cleansedDataEntry);
+                CleansedDataStore latestForFinalization =
+                        cleansedDataStoreRepository.findById(cleansedDataStoreId).orElse(cleansedDataEntry);
+                enrichmentProcessor.runFinalizationSteps(latestForFinalization);
             } catch (Exception e) {
                 logger.error("Finalization failed for CleansedDataStore ID {} after skipping all items: {}", cleansedDataStoreId, e.getMessage(), e);
             }
