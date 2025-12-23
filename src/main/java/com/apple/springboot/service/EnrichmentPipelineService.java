@@ -142,7 +142,14 @@ public class EnrichmentPipelineService {
             logger.info("All {} items were skipped for enrichment for CleansedDataStore ID {}.", changedItems.size(), cleansedDataStoreId);
             cleansedDataEntry.setStatus("ENRICHMENT_SKIPPED");
             cleansedDataStoreRepository.save(cleansedDataEntry);
-            progressService.complete(cleansedDataStoreId);
+            // Even when everything is skipped (e.g. analytics excluded), we still need to run the
+            // finalization steps (consolidation + embedding markers + final status) so downstream
+            // reads don't end up with empty consolidated tables.
+            try {
+                enrichmentProcessor.runFinalizationSteps(cleansedDataEntry);
+            } catch (Exception e) {
+                logger.error("Finalization failed for CleansedDataStore ID {} after skipping all items: {}", cleansedDataStoreId, e.getMessage(), e);
+            }
             return;
         }
 
