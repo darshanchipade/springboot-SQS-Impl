@@ -42,7 +42,7 @@ public class BedrockEnrichmentService {
     private boolean computeItemVector;
     @Autowired
     public BedrockEnrichmentService(ObjectMapper objectMapper,
-                                    @Value("${aws.region}") String region,
+                                    @Value("${aws.region:us-east-1}") String region,
                                     @Value("${aws.bedrock.modelId}") String modelId,
                                     @Value("${aws.bedrock.embeddingModelId}") String embeddingModelId,
                                     @Value("${app.bedrock.maxTokens:512}") int bedrockMaxTokens) {
