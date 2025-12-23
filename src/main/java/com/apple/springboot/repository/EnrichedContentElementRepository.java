@@ -26,4 +26,6 @@ public interface EnrichedContentElementRepository extends JpaRepository<Enriched
     Optional<EnrichedContentElement> findByCleansedDataIdAndItemSourcePathAndItemOriginalFieldName(UUID cleansedDataId, String sourcePath, String fieldName);
     List<EnrichedContentElement> findByCleansedDataIdOrderByEnrichedAtAsc(UUID cleansedDataId);
 
+    List<EnrichedContentElement> findAllBySourceUriAndVersion(String sourceUri, Integer version);
+
 }

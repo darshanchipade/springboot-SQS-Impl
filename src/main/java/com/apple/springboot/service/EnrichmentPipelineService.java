@@ -98,14 +98,39 @@ public class EnrichmentPipelineService {
                         m -> new ArrayList<>(m.values())
                 ));
 
-        // Filter to only items that need enrichment (text changed)
-        List<CleansedItemDetail> changedItems = itemsToEnrich.stream()
-                .filter(itemDetail -> !enrichedContentElementRepository
-                        .existsByItemSourcePathAndItemOriginalFieldNameAndCleansedText(
-                                itemDetail.sourcePath,
-                                itemDetail.originalFieldName,
-                                itemDetail.cleansedContent))
-                .collect(Collectors.toList());
+        // Filter to only items that need enrichment (text changed).
+        // IMPORTANT: Compare against the previous version for this same sourceUri to avoid false
+        // negatives from global "exists" checks (which can match other sources/versions).
+        List<CleansedItemDetail> changedItems;
+        Integer currentVersion = cleansedDataEntry.getVersion();
+        Integer previousVersion = (currentVersion != null && currentVersion > 1) ? currentVersion - 1 : null;
+        if (previousVersion != null && cleansedDataEntry.getSourceUri() != null) {
+            List<com.apple.springboot.model.EnrichedContentElement> previousElements =
+                    enrichedContentElementRepository.findAllBySourceUriAndVersion(cleansedDataEntry.getSourceUri(), previousVersion);
+            Map<String, String> previousTextByKey = previousElements.stream()
+                    .filter(e -> e.getItemSourcePath() != null && e.getItemOriginalFieldName() != null)
+                    .collect(Collectors.toMap(
+                            e -> e.getItemSourcePath() + "::" + e.getItemOriginalFieldName(),
+                            com.apple.springboot.model.EnrichedContentElement::getCleansedText,
+                            (a, b) -> a
+                    ));
+            changedItems = itemsToEnrich.stream()
+                    .filter(itemDetail -> {
+                        String key = itemDetail.sourcePath + "::" + itemDetail.originalFieldName;
+                        String prev = previousTextByKey.get(key);
+                        return prev == null || !Objects.equals(prev, itemDetail.cleansedContent);
+                    })
+                    .collect(Collectors.toList());
+        } else {
+            // First run (or missing version info): fall back to global existence check.
+            changedItems = itemsToEnrich.stream()
+                    .filter(itemDetail -> !enrichedContentElementRepository
+                            .existsByItemSourcePathAndItemOriginalFieldNameAndCleansedText(
+                                    itemDetail.sourcePath,
+                                    itemDetail.originalFieldName,
+                                    itemDetail.cleansedContent))
+                    .collect(Collectors.toList());
+        }
 
         logger.info("After change-detection filtering, {} items remain for processing (CleansedDataStore ID {}).",
                 changedItems.size(), cleansedDataStoreId);
