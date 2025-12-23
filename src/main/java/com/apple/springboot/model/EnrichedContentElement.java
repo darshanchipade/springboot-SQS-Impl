@@ -32,9 +32,6 @@ public class EnrichedContentElement {
     @Column(name = "item_source_path", columnDefinition = "TEXT")
     private String itemSourcePath;
 
-    @Column(name = "item_usage_path", columnDefinition = "TEXT")
-    private String itemUsagePath;
-
     @Column(name = "item_original_field_name", columnDefinition = "TEXT")
     private String itemOriginalFieldName;
 

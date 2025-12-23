@@ -69,7 +69,7 @@ public class SearchController {
         List<ContentChunkWithDistance> results = vectorSearchService.search(
                 request.getQuery(),
                 request.getOriginal_field_name(),
-                200,                  // limit
+                15,                  // limit
                 request.getTags(),
                 request.getKeywords(),
                 request.getContext(),

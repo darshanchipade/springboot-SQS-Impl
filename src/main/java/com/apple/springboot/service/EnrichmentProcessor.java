@@ -174,12 +174,8 @@ public class EnrichmentProcessor {
                 persistenceService.saveErrorEnrichedElement(itemDetail, cleansedDataEntry, "ERROR_ENRICHMENT_FAILED", msg);
             } else {
                 Map<String, Object> ctx = objectMapper.convertValue(itemDetail.context, new com.fasterxml.jackson.core.type.TypeReference<>() {});
-                String base = (itemDetail.usagePath != null && !itemDetail.usagePath.isBlank())
-                        ? itemDetail.usagePath
-                        : itemDetail.sourcePath;
-                ctx.put("fullContextId", base + "::" + itemDetail.originalFieldName);
+                ctx.put("fullContextId", itemDetail.sourcePath + "::" + itemDetail.originalFieldName);
                 ctx.put("sourcePath", itemDetail.sourcePath);
-                ctx.put("usagePath", itemDetail.usagePath);
                 Map<String, Object> prov = new HashMap<>();
                 prov.put("modelId", bedrockEnrichmentService.getConfiguredModelId());
                 ctx.put("provenance", prov);
@@ -199,16 +195,9 @@ public class EnrichmentProcessor {
     }
 
     private void checkCompletion(CleansedDataStore cleansedDataEntry) {
-        // expected = unique items by occurrence identity (usagePath preferred, fallback to sourcePath)
+        // expected = unique items by (sourcePath, originalFieldName)
         long expected = cleansedDataEntry.getCleansedItems().stream()
-                .map(item -> {
-                    Object up = item.get("usagePath");
-                    Object sp = item.get("sourcePath");
-                    Object fn = item.get("originalFieldName");
-                    String base = (up instanceof String u && !u.isBlank()) ? u : (sp instanceof String s ? s : null);
-                    return (base != null && fn instanceof String f) ? base + "::" + f : null;
-                })
-                .filter(k -> k != null && !k.isBlank())
+                .map(item -> ((String) item.get("sourcePath")) + "::" + ((String) item.get("originalFieldName")))
                 .distinct()
                 .count();
 

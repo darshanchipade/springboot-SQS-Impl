@@ -83,17 +83,14 @@ public class EnrichmentPipelineService {
             return;
         }
 
-        // If delta flags are present, only enrich delta items (edited/new occurrences).
-        List<Map<String, Object>> mapsToConvert = filterToDeltaItemsIfPresent(maps);
-
-        // Convert and deduplicate by occurrence identity (usagePath preferred, fallback to sourcePath)
-        List<CleansedItemDetail> rawItems = convertMapsToCleansedItemDetails(mapsToConvert);
-        logger.info("Converted {} cleansed entries into {} unique occurrence keys for CleansedDataStore ID {}.",
-                mapsToConvert.size(), rawItems.size(), cleansedDataStoreId);
+        // Convert and deduplicate by (sourcePath, originalFieldName)
+        List<CleansedItemDetail> rawItems = convertMapsToCleansedItemDetails(maps);
+        logger.info("Converted {} cleansed entries into {} unique (sourcePath,field) pairs for CleansedDataStore ID {}.",
+                maps.size(), rawItems.size(), cleansedDataStoreId);
         List<CleansedItemDetail> itemsToEnrich = rawItems.stream()
                 .collect(Collectors.collectingAndThen(
                         Collectors.toMap(
-                                this::buildOccurrenceKey,
+                                it -> it.sourcePath + "::" + it.originalFieldName,
                                 it -> it,
                                 (a, b) -> a,
                                 LinkedHashMap::new
@@ -103,7 +100,11 @@ public class EnrichmentPipelineService {
 
         // Filter to only items that need enrichment (text changed)
         List<CleansedItemDetail> changedItems = itemsToEnrich.stream()
-                .filter(itemDetail -> !alreadyEnrichedSameOccurrenceText(itemDetail))
+                .filter(itemDetail -> !enrichedContentElementRepository
+                        .existsByItemSourcePathAndItemOriginalFieldNameAndCleansedText(
+                                itemDetail.sourcePath,
+                                itemDetail.originalFieldName,
+                                itemDetail.cleansedContent))
                 .collect(Collectors.toList());
 
         logger.info("After change-detection filtering, {} items remain for processing (CleansedDataStore ID {}).",
@@ -237,13 +238,12 @@ public class EnrichmentPipelineService {
                 .map(map -> {
                     try {
                         String sourcePath = (String) map.get("sourcePath");
-                        String usagePath = (String) map.get("usagePath");
                         String originalFieldName = (String) map.get("originalFieldName");
                         String cleansedContent = (String) map.get("cleansedContent");
                         String model = (String) map.get("model");
                         EnrichmentContext context = objectMapper.convertValue(map.get("context"), EnrichmentContext.class);
                         boolean skipEnrichment = extractSkipFlag(map.get("skipEnrichment"));
-                        return new CleansedItemDetail(sourcePath, usagePath, originalFieldName, cleansedContent, model, context, skipEnrichment);
+                        return new CleansedItemDetail(sourcePath, originalFieldName, cleansedContent, model, context, skipEnrichment);
                     } catch (Exception e) {
                         logger.warn("Could not convert map to CleansedItemDetail object. Skipping item. Map: {}, Error: {}", map, e.getMessage());
                         return null;
@@ -251,50 +251,6 @@ public class EnrichmentPipelineService {
                 })
                 .filter(Objects::nonNull)
                 .collect(Collectors.toList());
-    }
-
-    private List<Map<String, Object>> filterToDeltaItemsIfPresent(List<Map<String, Object>> maps) {
-        if (maps == null || maps.isEmpty()) {
-            return List.of();
-        }
-        boolean anyDeltaFlag = maps.stream()
-                .filter(Objects::nonNull)
-                .anyMatch(m -> m.containsKey("delta"));
-        if (!anyDeltaFlag) {
-            return maps;
-        }
-        return maps.stream()
-                .filter(Objects::nonNull)
-                .filter(this::isDeltaItem)
-                .collect(Collectors.toList());
-    }
-
-    private boolean isDeltaItem(Map<String, Object> map) {
-        Object d = map.get("delta");
-        if (d instanceof Boolean b) return b;
-        if (d instanceof String s) return Boolean.parseBoolean(s);
-        return false;
-    }
-
-    private String buildOccurrenceKey(CleansedItemDetail detail) {
-        String base = (detail.usagePath != null && !detail.usagePath.isBlank())
-                ? detail.usagePath
-                : detail.sourcePath;
-        return base + "::" + detail.originalFieldName;
-    }
-
-    private boolean alreadyEnrichedSameOccurrenceText(CleansedItemDetail detail) {
-        String field = detail.originalFieldName;
-        String text = detail.cleansedContent;
-        if (field == null || text == null) {
-            return false;
-        }
-        if (detail.usagePath != null && !detail.usagePath.isBlank()) {
-            return enrichedContentElementRepository
-                    .existsByItemUsagePathAndItemOriginalFieldNameAndCleansedText(detail.usagePath, field, text);
-        }
-        return enrichedContentElementRepository
-                .existsByItemSourcePathAndItemOriginalFieldNameAndCleansedText(detail.sourcePath, field, text);
     }
 
     private boolean extractSkipFlag(Object flag) {

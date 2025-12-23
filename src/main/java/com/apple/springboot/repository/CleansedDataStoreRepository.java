@@ -15,7 +15,6 @@ import java.util.UUID;
 public interface CleansedDataStoreRepository extends JpaRepository<CleansedDataStore, UUID> {
     Optional<CleansedDataStore> findByRawDataId(UUID rawDataId);
     Optional<CleansedDataStore>findTopByRawDataIdOrderByCleansedAtDesc (UUID rawDataId);
-    Optional<CleansedDataStore> findTopBySourceUriOrderByCleansedAtDesc(String sourceUri);
     // Optional<CleansedDataStore> findBySourceUriAndContentHash(String sourceUri, String contentHash);
 
     @Transactional
