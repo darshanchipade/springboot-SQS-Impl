@@ -15,4 +15,5 @@ public interface ContentHashRepository extends JpaRepository<ContentHash, Conten
     Optional<ContentHash> findByUsagePathAndItemType(String usagePath, String itemType);
 
     List<ContentHash> findAllBySourcePathAndItemType(String sourcePath, String itemType);
+    List<ContentHash> findAllBySourcePathIn(List<String> sourcePaths);
 }
