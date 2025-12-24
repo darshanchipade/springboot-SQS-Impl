@@ -575,13 +575,18 @@ public class DataIngestionService {
 
         Map<String, ContentHash> exactIndex = new HashMap<>();
         Map<String, ContentHash> legacyIndex = new HashMap<>();
+        Map<String, Set<String>> legacyContentHashes = new HashMap<>();
         if (!sourcePaths.isEmpty()) {
             List<ContentHash> existing = contentHashRepository.findAllBySourcePathIn(new ArrayList<>(sourcePaths));
             for (ContentHash hash : existing) {
                 if (hash.getSourcePath() == null || hash.getItemType() == null) {
                     continue;
                 }
-                legacyIndex.put(legacyKey(hash.getSourcePath(), hash.getItemType()), hash);
+                String legacyKey = legacyKey(hash.getSourcePath(), hash.getItemType());
+                legacyIndex.put(legacyKey, hash);
+                if (hash.getContentHash() != null) {
+                    legacyContentHashes.computeIfAbsent(legacyKey, k -> new HashSet<>()).add(hash.getContentHash());
+                }
                 exactIndex.put(exactKey(hash.getSourcePath(), hash.getItemType(), hash.getUsagePath()), hash);
             }
         }
@@ -598,25 +603,45 @@ public class DataIngestionService {
 
             if (sourcePath == null || itemType == null) continue;
 
-            ContentHash existingHash = exactIndex.get(exactKey(sourcePath, itemType, usagePath));
-            if (existingHash == null && !strictUsagePath) {
-                existingHash = legacyIndex.get(legacyKey(sourcePath, itemType));
-                if (existingHash != null) {
+            // The exact record for this (sourcePath,itemType,usagePath).
+            ContentHash exactExisting = exactIndex.get(exactKey(sourcePath, itemType, usagePath));
+
+            // For delta detection we may also consider legacy matches if usagePath isn't stable.
+            ContentHash matchForComparison = exactExisting;
+            boolean usedLegacyFallback = false;
+            if (matchForComparison == null && !strictUsagePath) {
+                usedLegacyFallback = true;
+                String lk = legacyKey(sourcePath, itemType);
+                matchForComparison = legacyIndex.get(lk);
+                if (matchForComparison != null) {
                     logger.debug("Change detection fallback matched by (sourcePath,itemType) without usagePath for {} :: {}", sourcePath, itemType);
                 }
             }
 
-            boolean contentChanged = existingHash == null
-                    || !Objects.equals(existingHash.getContentHash(), newContentHash);
-            boolean contextChanged = considerContextChange && (existingHash == null
-                    || !Objects.equals(existingHash.getContextHash(), newContextHash));
+            boolean contentChanged = matchForComparison == null
+                    || !Objects.equals(matchForComparison.getContentHash(), newContentHash);
+            boolean contextChanged = considerContextChange && (matchForComparison == null
+                    || !Objects.equals(matchForComparison.getContextHash(), newContextHash));
 
-            if (existingHash == null || contentChanged || contextChanged) {
+            // If we only matched via legacy key and contentHash is already known for this item, suppress
+            // false deltas caused by usagePath changes.
+            if (usedLegacyFallback && matchForComparison != null) {
+                String lk = legacyKey(sourcePath, itemType);
+                Set<String> known = legacyContentHashes.get(lk);
+                if (known != null && newContentHash != null && known.contains(newContentHash)) {
+                    contentChanged = false;
+                    contextChanged = false;
+                }
+            }
+
+            if (matchForComparison == null || contentChanged || contextChanged) {
                 changedItems.add(item);
             }
 
-            ContentHash hashToSave = existingHash != null
-                    ? existingHash
+            // Always persist/update the hash for the *current* usagePath.
+            // IMPORTANT: never overwrite a different usagePath row just because legacy fallback matched.
+            ContentHash hashToSave = exactExisting != null
+                    ? exactExisting
                     : new ContentHash(sourcePath, itemType, usagePath, null, null);
             hashToSave.setContentHash(newContentHash);
             hashToSave.setContextHash(newContextHash);
