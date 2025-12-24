@@ -102,9 +102,41 @@ public class EnrichmentPipelineService {
                 ));
 
         // Filter to only items that need enrichment (text changed).
+        // Priority order:
+        // 1) If this cleansedDataId already has enriched elements, compare against those (supports "edit one item and re-run").
         // IMPORTANT: Compare against the previous version for this same sourceUri to avoid false
         // negatives from global "exists" checks (which can match other sources/versions).
         List<CleansedItemDetail> changedItems;
+        List<com.apple.springboot.model.EnrichedContentElement> currentElements =
+                enrichedContentElementRepository.findAllByCleansedDataId(cleansedDataStoreId);
+        if (currentElements != null && !currentElements.isEmpty()) {
+            Map<String, String> currentHashByKey = currentElements.stream()
+                    .filter(e -> e.getItemSourcePath() != null && e.getItemOriginalFieldName() != null)
+                    .collect(Collectors.toMap(
+                            e -> e.getItemSourcePath() + "::" + e.getItemOriginalFieldName(),
+                            com.apple.springboot.model.EnrichedContentElement::getContentHash,
+                            (a, b) -> a
+                    ));
+            Map<String, String> currentTextByKey = currentElements.stream()
+                    .filter(e -> e.getItemSourcePath() != null && e.getItemOriginalFieldName() != null)
+                    .collect(Collectors.toMap(
+                            e -> e.getItemSourcePath() + "::" + e.getItemOriginalFieldName(),
+                            com.apple.springboot.model.EnrichedContentElement::getCleansedText,
+                            (a, b) -> a
+                    ));
+            changedItems = itemsToEnrich.stream()
+                    .filter(itemDetail -> {
+                        String key = itemDetail.sourcePath + "::" + itemDetail.originalFieldName;
+                        String baselineHash = currentHashByKey.get(key);
+                        String currentHash = contentHashingService.hash(itemDetail.cleansedContent);
+                        if (baselineHash != null && currentHash != null) {
+                            return !Objects.equals(baselineHash, currentHash);
+                        }
+                        String baselineText = currentTextByKey.get(key);
+                        return baselineText == null || !Objects.equals(baselineText, itemDetail.cleansedContent);
+                    })
+                    .collect(Collectors.toList());
+        } else {
         Integer currentVersion = cleansedDataEntry.getVersion();
         Integer previousVersion = (currentVersion != null && currentVersion > 1) ? currentVersion - 1 : null;
         if (previousVersion != null && cleansedDataEntry.getSourceUri() != null) {
@@ -174,6 +206,7 @@ public class EnrichmentPipelineService {
                                         itemDetail.cleansedContent);
                     })
                     .collect(Collectors.toList());
+        }
         }
 
         logger.info("After change-detection filtering, {} items remain for processing (CleansedDataStore ID {}).",
