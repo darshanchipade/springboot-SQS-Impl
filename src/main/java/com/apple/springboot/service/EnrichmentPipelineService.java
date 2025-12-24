@@ -34,6 +34,7 @@ public class EnrichmentPipelineService {
     private final EnrichmentProcessor enrichmentProcessor;
     private final EnrichmentPersistenceService persistenceService;
     private final EnrichmentProgressService progressService;
+    private final ContentHashingService contentHashingService;
     private final boolean useSqs;
 
     public EnrichmentPipelineService(CleansedDataStoreRepository cleansedDataStoreRepository,
@@ -44,6 +45,7 @@ public class EnrichmentPipelineService {
                                      EnrichmentProcessor enrichmentProcessor,
                                      EnrichmentPersistenceService persistenceService,
                                      EnrichmentProgressService progressService,
+                                     ContentHashingService contentHashingService,
                                      @Value("${app.enrichment.use-sqs:false}") boolean useSqs) {
         this.cleansedDataStoreRepository = cleansedDataStoreRepository;
         this.enrichedContentElementRepository = enrichedContentElementRepository;
@@ -53,6 +55,7 @@ public class EnrichmentPipelineService {
         this.enrichmentProcessor = enrichmentProcessor;
         this.persistenceService = persistenceService;
         this.progressService = progressService;
+        this.contentHashingService = contentHashingService;
         this.useSqs = useSqs;
     }
 
@@ -107,6 +110,13 @@ public class EnrichmentPipelineService {
         if (previousVersion != null && cleansedDataEntry.getSourceUri() != null) {
             List<com.apple.springboot.model.EnrichedContentElement> previousElements =
                     enrichedContentElementRepository.findAllBySourceUriAndVersion(cleansedDataEntry.getSourceUri(), previousVersion);
+            Map<String, String> previousHashByKey = previousElements.stream()
+                    .filter(e -> e.getItemSourcePath() != null && e.getItemOriginalFieldName() != null)
+                    .collect(Collectors.toMap(
+                            e -> e.getItemSourcePath() + "::" + e.getItemOriginalFieldName(),
+                            com.apple.springboot.model.EnrichedContentElement::getContentHash,
+                            (a, b) -> a
+                    ));
             Map<String, String> previousTextByKey = previousElements.stream()
                     .filter(e -> e.getItemSourcePath() != null && e.getItemOriginalFieldName() != null)
                     .collect(Collectors.toMap(
@@ -117,18 +127,52 @@ public class EnrichmentPipelineService {
             changedItems = itemsToEnrich.stream()
                     .filter(itemDetail -> {
                         String key = itemDetail.sourcePath + "::" + itemDetail.originalFieldName;
+                        String currentHash = contentHashingService.hash(itemDetail.cleansedContent);
+                        String prevHash = previousHashByKey.get(key);
+                        if (prevHash != null && currentHash != null) {
+                            return !Objects.equals(prevHash, currentHash);
+                        }
+                        // Back-compat: older rows won’t have hashes yet
                         String prev = previousTextByKey.get(key);
                         return prev == null || !Objects.equals(prev, itemDetail.cleansedContent);
                     })
                     .collect(Collectors.toList());
         } else {
-            // First run (or missing version info): fall back to global existence check.
+            // First run (or missing version info): fall back to existence check.
+            // Prefer scoped-by-sourceUri when available to avoid cross-source false negatives.
             changedItems = itemsToEnrich.stream()
-                    .filter(itemDetail -> !enrichedContentElementRepository
-                            .existsByItemSourcePathAndItemOriginalFieldNameAndCleansedText(
-                                    itemDetail.sourcePath,
-                                    itemDetail.originalFieldName,
-                                    itemDetail.cleansedContent))
+                    .filter(itemDetail -> {
+                        String currentHash = contentHashingService.hash(itemDetail.cleansedContent);
+                        String sourceUri = cleansedDataEntry.getSourceUri();
+                        if (sourceUri != null && currentHash != null) {
+                            return !enrichedContentElementRepository
+                                    .existsBySourceUriAndItemSourcePathAndItemOriginalFieldNameAndContentHash(
+                                            sourceUri,
+                                            itemDetail.sourcePath,
+                                            itemDetail.originalFieldName,
+                                            currentHash);
+                        }
+                        if (currentHash != null) {
+                            return !enrichedContentElementRepository
+                                    .existsByItemSourcePathAndItemOriginalFieldNameAndContentHash(
+                                            itemDetail.sourcePath,
+                                            itemDetail.originalFieldName,
+                                            currentHash);
+                        }
+                        if (sourceUri != null) {
+                            return !enrichedContentElementRepository
+                                    .existsBySourceUriAndItemSourcePathAndItemOriginalFieldNameAndCleansedText(
+                                            sourceUri,
+                                            itemDetail.sourcePath,
+                                            itemDetail.originalFieldName,
+                                            itemDetail.cleansedContent);
+                        }
+                        return !enrichedContentElementRepository
+                                .existsByItemSourcePathAndItemOriginalFieldNameAndCleansedText(
+                                        itemDetail.sourcePath,
+                                        itemDetail.originalFieldName,
+                                        itemDetail.cleansedContent);
+                    })
                     .collect(Collectors.toList());
         }
 

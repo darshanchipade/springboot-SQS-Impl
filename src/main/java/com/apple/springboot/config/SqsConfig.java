@@ -10,7 +10,8 @@ import software.amazon.awssdk.services.sqs.SqsClient;
 @Configuration
 public class SqsConfig {
 
-    @Value("${aws.region}")
+    // Default region so tests/local runs don't fail on missing env.
+    @Value("${aws.region:us-east-1}")
     private String awsRegion;
 
     @Bean
