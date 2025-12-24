@@ -603,31 +603,29 @@ public class DataIngestionService {
 
             if (sourcePath == null || itemType == null) continue;
 
-            ContentHash existingHash = exactIndex.get(exactKey(sourcePath, itemType, usagePath));
-            if (existingHash == null && !strictUsagePath) {
-                // If usagePath is unstable between runs, fall back to legacy (sourcePath,itemType) match.
-                // Treat as unchanged if ANY existing usagePath for this legacy key already has the same contentHash.
+            // The exact record for this (sourcePath,itemType,usagePath).
+            ContentHash exactExisting = exactIndex.get(exactKey(sourcePath, itemType, usagePath));
+
+            // For delta detection we may also consider legacy matches if usagePath isn't stable.
+            ContentHash matchForComparison = exactExisting;
+            boolean usedLegacyFallback = false;
+            if (matchForComparison == null && !strictUsagePath) {
+                usedLegacyFallback = true;
                 String lk = legacyKey(sourcePath, itemType);
-                Set<String> knownContentHashes = legacyContentHashes.get(lk);
-                if (knownContentHashes != null && newContentHash != null && knownContentHashes.contains(newContentHash)) {
-                    // Content has been seen before for this logical item; do not treat as a delta.
-                    existingHash = legacyIndex.get(lk);
-                } else {
-                    existingHash = legacyIndex.get(lk);
-                }
-                if (existingHash != null) {
+                matchForComparison = legacyIndex.get(lk);
+                if (matchForComparison != null) {
                     logger.debug("Change detection fallback matched by (sourcePath,itemType) without usagePath for {} :: {}", sourcePath, itemType);
                 }
             }
 
-            boolean contentChanged = existingHash == null
-                    || !Objects.equals(existingHash.getContentHash(), newContentHash);
-            boolean contextChanged = considerContextChange && (existingHash == null
-                    || !Objects.equals(existingHash.getContextHash(), newContextHash));
+            boolean contentChanged = matchForComparison == null
+                    || !Objects.equals(matchForComparison.getContentHash(), newContentHash);
+            boolean contextChanged = considerContextChange && (matchForComparison == null
+                    || !Objects.equals(matchForComparison.getContextHash(), newContextHash));
 
             // If we only matched via legacy key and contentHash is already known for this item, suppress
             // false deltas caused by usagePath changes.
-            if (!strictUsagePath && existingHash != null) {
+            if (usedLegacyFallback && matchForComparison != null) {
                 String lk = legacyKey(sourcePath, itemType);
                 Set<String> known = legacyContentHashes.get(lk);
                 if (known != null && newContentHash != null && known.contains(newContentHash)) {
@@ -636,12 +634,14 @@ public class DataIngestionService {
                 }
             }
 
-            if (existingHash == null || contentChanged || contextChanged) {
+            if (matchForComparison == null || contentChanged || contextChanged) {
                 changedItems.add(item);
             }
 
-            ContentHash hashToSave = existingHash != null
-                    ? existingHash
+            // Always persist/update the hash for the *current* usagePath.
+            // IMPORTANT: never overwrite a different usagePath row just because legacy fallback matched.
+            ContentHash hashToSave = exactExisting != null
+                    ? exactExisting
                     : new ContentHash(sourcePath, itemType, usagePath, null, null);
             hashToSave.setContentHash(newContentHash);
             hashToSave.setContextHash(newContextHash);
