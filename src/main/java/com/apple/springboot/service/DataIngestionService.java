@@ -515,10 +515,12 @@ public class DataIngestionService {
             List<Map<String, Object>> itemsToProcess;
             if (returnAllItems || forceFullRun) {
                 // Still persist the latest observed hashes so subsequent runs can correctly compute deltas.
-                filterForChangedItems(allExtractedItems);
+                persistItemHashes(allExtractedItems);
                 itemsToProcess = allExtractedItems;
             } else {
-                itemsToProcess = filterForChangedItems(allExtractedItems);
+                itemsToProcess = filterForChangedItemsAgainstPreviousRaw(allExtractedItems, rawDataStore);
+                // Always persist latest hashes for future runs.
+                persistItemHashes(allExtractedItems);
             }
 
             if (debugCountersEnabled) {
@@ -638,6 +640,115 @@ public class DataIngestionService {
         }
 
         return changedItems;
+    }
+
+    /**
+     * Computes delta items by comparing against the previous raw JSON version for this sourceUri.
+     * This avoids false "no changes" results when the content_hashes table is out-of-sync or shared.
+     */
+    private List<Map<String, Object>> filterForChangedItemsAgainstPreviousRaw(List<Map<String, Object>> allItems,
+                                                                             RawDataStore currentRaw) {
+        if (allItems == null || allItems.isEmpty()) {
+            return Collections.emptyList();
+        }
+        if (currentRaw == null || currentRaw.getSourceUri() == null || currentRaw.getVersion() == null) {
+            // Fall back to existing behavior
+            return filterForChangedItems(allItems);
+        }
+
+        Integer version = currentRaw.getVersion();
+        if (version <= 1) {
+            return allItems;
+        }
+
+        Optional<RawDataStore> prevOpt =
+                rawDataStoreRepository.findTopBySourceUriAndVersionLessThanOrderByVersionDesc(currentRaw.getSourceUri(), version);
+        if (prevOpt.isEmpty()) {
+            return filterForChangedItems(allItems);
+        }
+
+        String prevRaw = prevOpt.get().getRawContentText();
+        if ((prevRaw == null || prevRaw.isBlank()) && prevOpt.get().getRawContentBinary() != null) {
+            prevRaw = new String(prevOpt.get().getRawContentBinary(), StandardCharsets.UTF_8);
+        }
+        if (prevRaw == null || prevRaw.isBlank()) {
+            return filterForChangedItems(allItems);
+        }
+
+        List<Map<String, Object>> prevItems = extractItemsFromRaw(prevRaw, currentRaw.getSourceUri());
+        Map<String, Map<String, Object>> prevIndex = new HashMap<>(Math.max(16, prevItems.size() * 2));
+        for (Map<String, Object> item : prevItems) {
+            String sourcePath = (String) item.get("sourcePath");
+            String itemType = (String) item.get("itemType");
+            String usagePath = (String) item.get("usagePath");
+            if (sourcePath == null || itemType == null) continue;
+            prevIndex.put(exactKey(sourcePath, itemType, usagePath), item);
+        }
+
+        List<Map<String, Object>> changed = new ArrayList<>();
+        for (Map<String, Object> item : allItems) {
+            String sourcePath = (String) item.get("sourcePath");
+            String itemType = (String) item.get("itemType");
+            String usagePath = (String) item.get("usagePath");
+            if (sourcePath == null || itemType == null) continue;
+
+            Map<String, Object> prev = prevIndex.get(exactKey(sourcePath, itemType, usagePath));
+            String newContentHash = (String) item.get("contentHash");
+            String newContextHash = (String) item.get("contextHash");
+            String oldContentHash = prev != null ? (String) prev.get("contentHash") : null;
+            String oldContextHash = prev != null ? (String) prev.get("contextHash") : null;
+
+            boolean contentChanged = prev == null || !Objects.equals(oldContentHash, newContentHash);
+            boolean contextChanged = considerContextChange && (prev == null || !Objects.equals(oldContextHash, newContextHash));
+            if (contentChanged || contextChanged) {
+                changed.add(item);
+            }
+        }
+
+        return changed;
+    }
+
+    private List<Map<String, Object>> extractItemsFromRaw(String rawJsonContent, String sourceUri) {
+        try {
+            JsonNode rootNode = objectMapper.readTree(rawJsonContent);
+            List<Map<String, Object>> extracted = new ArrayList<>();
+            Envelope rootEnvelope = new Envelope();
+            rootEnvelope.setSourcePath(sourceUri);
+            rootEnvelope.setUsagePath(sourceUri);
+            rootEnvelope.setProvenance(new HashMap<>());
+            findAndExtractRecursive(rootNode, "#", rootEnvelope, new Facets(), extracted, new IngestionCounters());
+            return extracted;
+        } catch (Exception e) {
+            logger.warn("Failed to extract previous raw items for delta comparison: {}", e.getMessage());
+            return Collections.emptyList();
+        }
+    }
+
+    /**
+     * Persists item hashes for the current run (for troubleshooting and optional consumers).
+     * Delta computation should not depend on this being perfectly in-sync.
+     */
+    private void persistItemHashes(List<Map<String, Object>> allItems) {
+        if (allItems == null || allItems.isEmpty()) {
+            return;
+        }
+        List<ContentHash> toSave = new ArrayList<>(allItems.size());
+        for (Map<String, Object> item : allItems) {
+            if (item == null) continue;
+            String sourcePath = (String) item.get("sourcePath");
+            String itemType = (String) item.get("itemType");
+            String usagePath = (String) item.get("usagePath");
+            String contentHash = (String) item.get("contentHash");
+            String contextHash = (String) item.get("contextHash");
+            if (sourcePath == null || itemType == null) continue;
+            // usagePath is part of the entity key; normalize null to empty for safety
+            String up = (usagePath == null) ? "" : usagePath;
+            ContentHash ch = new ContentHash(sourcePath, itemType, up, contentHash, contextHash);
+            toSave.add(ch);
+        }
+        if (!toSave.isEmpty()) {
+            contentHashRepository.saveAll(toSave);
+        }
     }
 
     private String exactKey(String sourcePath, String itemType, String usagePath) {
