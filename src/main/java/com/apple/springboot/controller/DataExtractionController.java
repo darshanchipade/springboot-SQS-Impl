@@ -280,6 +280,97 @@ public class DataExtractionController {
         }
     }
 
+    @Operation(
+            summary = "Diff cleansed items between two cleansed IDs",
+            description = "Compares stored cleansed_items between two CleansedDataStore IDs and returns a list of changed keys. "
+                    + "This is useful for debugging why enrichment change detection found 0 items."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Diff computed successfully"),
+            @ApiResponse(responseCode = "404", description = "One or both cleansed records not found")
+    })
+    @GetMapping("/cleansed-items/diff")
+    public ResponseEntity<?> diffCleansedItems(
+            @Parameter(description = "Base CleansedDataStore ID", required = true)
+            @RequestParam("from") UUID fromId,
+            @Parameter(description = "Compare-to CleansedDataStore ID", required = true)
+            @RequestParam("to") UUID toId,
+            @RequestParam(value = "limit", defaultValue = "50") int limit) {
+
+        Optional<CleansedDataStore> fromOpt = cleansedDataStoreRepository.findById(fromId);
+        Optional<CleansedDataStore> toOpt = cleansedDataStoreRepository.findById(toId);
+        if (fromOpt.isEmpty() || toOpt.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("error", "One or both CleansedDataStore records not found", "from", String.valueOf(fromId), "to", String.valueOf(toId)));
+        }
+
+        CleansedDataStore from = fromOpt.get();
+        CleansedDataStore to = toOpt.get();
+
+        Map<String, Map<String, Object>> fromIndex = indexCleansedItems(from.getCleansedItems());
+        Map<String, Map<String, Object>> toIndex = indexCleansedItems(to.getCleansedItems());
+
+        Set<String> keys = new LinkedHashSet<>();
+        keys.addAll(fromIndex.keySet());
+        keys.addAll(toIndex.keySet());
+
+        List<Map<String, Object>> changed = new ArrayList<>();
+        for (String key : keys) {
+            Map<String, Object> a = fromIndex.get(key);
+            Map<String, Object> b = toIndex.get(key);
+            String aText = pickString(a, "cleansedContent", "cleansedValue");
+            String bText = pickString(b, "cleansedContent", "cleansedValue");
+            if (!Objects.equals(aText, bText)) {
+                changed.add(Map.of(
+                        "key", key,
+                        "sourcePath", pickString(b != null ? b : a, "sourcePath"),
+                        "field", pickString(b != null ? b : a, "originalFieldName", "itemType"),
+                        "from", safeSnippet(aText),
+                        "to", safeSnippet(bText)
+                ));
+                if (changed.size() >= Math.max(1, limit)) break;
+            }
+        }
+
+        return ResponseEntity.ok(Map.of(
+                "fromId", fromId.toString(),
+                "toId", toId.toString(),
+                "fromStatus", normalizeStatus(from.getStatus()),
+                "toStatus", normalizeStatus(to.getStatus()),
+                "changedCountShown", changed.size(),
+                "changed", changed
+        ));
+    }
+
+    private Map<String, Map<String, Object>> indexCleansedItems(List<Map<String, Object>> items) {
+        Map<String, Map<String, Object>> index = new LinkedHashMap<>();
+        if (items == null) return index;
+        for (Map<String, Object> item : items) {
+            if (item == null) continue;
+            String sourcePath = pickString(item, "sourcePath");
+            String field = pickString(item, "originalFieldName", "itemType");
+            if (sourcePath == null || field == null) continue;
+            index.put(sourcePath + "::" + field, item);
+        }
+        return index;
+    }
+
+    private String pickString(Map<String, Object> item, String... keys) {
+        if (item == null) return null;
+        for (String k : keys) {
+            Object v = item.get(k);
+            if (v instanceof String s && !s.isBlank()) return s;
+        }
+        return null;
+    }
+
+    private String safeSnippet(String s) {
+        if (s == null) return null;
+        int max = 180;
+        String trimmed = s.strip();
+        return trimmed.length() <= max ? trimmed : trimmed.substring(0, max) + "...";
+    }
+
     private static class ItemRowMapper implements Function<Map<String, Object>, CleansedItemRow> {
         @Override
         public CleansedItemRow apply(Map<String, Object> item) {
