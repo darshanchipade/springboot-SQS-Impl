@@ -19,15 +19,16 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.util.*;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api")
@@ -42,6 +43,7 @@ public class DataExtractionController {
 
     private final CleansedDataStoreRepository cleansedDataStoreRepository;
     private final ObjectMapper objectMapper;
+    private final Set<String> excludedItemTypes;
 
     // List of statuses from DataIngestionService that indicate a fatal error before enrichment stage,
     // or that processing should stop before enrichment.
@@ -61,12 +63,14 @@ public class DataExtractionController {
                                     EnrichmentPipelineService enrichmentPipelineService,
                                     EnrichmentReadService enrichmentReadService,
                                     CleansedDataStoreRepository cleansedDataStoreRepository,
-                                    ObjectMapper objectMapper) {
+                                    ObjectMapper objectMapper,
+                                    @Value("${app.ingestion.excluded-item-types:}") String excludedItemTypesProperty) {
         this.dataIngestionService = dataIngestionService;
         this.enrichmentPipelineService = enrichmentPipelineService;
         this.enrichmentReadService = enrichmentReadService;
         this.cleansedDataStoreRepository = cleansedDataStoreRepository;
         this.objectMapper = objectMapper;
+        this.excludedItemTypes = parseExcludedItemTypes(excludedItemTypesProperty);
     }
     @GetMapping("/hello")
     public String extractCleanseEnrichAndStore(){
@@ -223,10 +227,50 @@ public class DataExtractionController {
                 .orElse(List.of())
                 .stream()
                 .filter(Objects::nonNull)
+                // Hide excluded/skipped items (analytics*, etc.) from the UI view
+                .filter(item -> !shouldHideFromCleansedItemsView(item))
                 .map(new ItemRowMapper())
                 .toList();
 
         return ResponseEntity.ok(new CleansedItemsResponse(rows));
+    }
+
+    private String pickString(Map<String, Object> item, String... keys) {
+        if (item == null) return null;
+        for (String k : keys) {
+            Object v = item.get(k);
+            if (v instanceof String s && !s.isBlank()) return s;
+        }
+        return null;
+    }
+
+    private boolean shouldHideFromCleansedItemsView(Map<String, Object> item) {
+        if (item == null) return true;
+        boolean skip = extractSkipFlag(item.get("skipEnrichment"));
+        String fieldKey = pickString(item, "originalFieldName", "itemType");
+        boolean excluded = false;
+        if (fieldKey != null && !excludedItemTypes.isEmpty()) {
+            String lower = fieldKey.toLowerCase(Locale.ROOT);
+            excluded = excludedItemTypes.stream().anyMatch(lower::startsWith);
+        }
+        return skip || excluded;
+    }
+
+    private boolean extractSkipFlag(Object flag) {
+        if (flag instanceof Boolean b) return b;
+        if (flag instanceof String s) return Boolean.parseBoolean(s);
+        return false;
+    }
+
+    private Set<String> parseExcludedItemTypes(String property) {
+        if (property == null || property.isBlank()) {
+            return Set.of();
+        }
+        return Arrays.stream(property.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .map(s -> s.toLowerCase(Locale.ROOT))
+                .collect(Collectors.toUnmodifiableSet());
     }
 
     private static class ItemRowMapper implements Function<Map<String, Object>, CleansedItemRow> {

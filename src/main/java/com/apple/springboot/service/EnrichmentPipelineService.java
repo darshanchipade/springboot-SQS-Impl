@@ -34,6 +34,7 @@ public class EnrichmentPipelineService {
     private final EnrichmentProcessor enrichmentProcessor;
     private final EnrichmentPersistenceService persistenceService;
     private final EnrichmentProgressService progressService;
+    private final ContentHashingService contentHashingService;
     private final boolean useSqs;
 
     public EnrichmentPipelineService(CleansedDataStoreRepository cleansedDataStoreRepository,
@@ -44,6 +45,7 @@ public class EnrichmentPipelineService {
                                      EnrichmentProcessor enrichmentProcessor,
                                      EnrichmentPersistenceService persistenceService,
                                      EnrichmentProgressService progressService,
+                                     ContentHashingService contentHashingService,
                                      @Value("${app.enrichment.use-sqs:false}") boolean useSqs) {
         this.cleansedDataStoreRepository = cleansedDataStoreRepository;
         this.enrichedContentElementRepository = enrichedContentElementRepository;
@@ -53,6 +55,7 @@ public class EnrichmentPipelineService {
         this.enrichmentProcessor = enrichmentProcessor;
         this.persistenceService = persistenceService;
         this.progressService = progressService;
+        this.contentHashingService = contentHashingService;
         this.useSqs = useSqs;
     }
 
@@ -99,15 +102,22 @@ public class EnrichmentPipelineService {
                 ));
 
         // Filter to only items that need enrichment (text changed).
+        // Priority order:
+        // 1) If this cleansedDataId already has enriched elements, compare against those (supports "edit one item and re-run").
         // IMPORTANT: Compare against the previous version for this same sourceUri to avoid false
         // negatives from global "exists" checks (which can match other sources/versions).
         List<CleansedItemDetail> changedItems;
-        Integer currentVersion = cleansedDataEntry.getVersion();
-        Integer previousVersion = (currentVersion != null && currentVersion > 1) ? currentVersion - 1 : null;
-        if (previousVersion != null && cleansedDataEntry.getSourceUri() != null) {
-            List<com.apple.springboot.model.EnrichedContentElement> previousElements =
-                    enrichedContentElementRepository.findAllBySourceUriAndVersion(cleansedDataEntry.getSourceUri(), previousVersion);
-            Map<String, String> previousTextByKey = previousElements.stream()
+        List<com.apple.springboot.model.EnrichedContentElement> currentElements =
+                enrichedContentElementRepository.findAllByCleansedDataId(cleansedDataStoreId);
+        if (currentElements != null && !currentElements.isEmpty()) {
+            Map<String, String> currentHashByKey = currentElements.stream()
+                    .filter(e -> e.getItemSourcePath() != null && e.getItemOriginalFieldName() != null)
+                    .collect(Collectors.toMap(
+                            e -> e.getItemSourcePath() + "::" + e.getItemOriginalFieldName(),
+                            com.apple.springboot.model.EnrichedContentElement::getContentHash,
+                            (a, b) -> a
+                    ));
+            Map<String, String> currentTextByKey = currentElements.stream()
                     .filter(e -> e.getItemSourcePath() != null && e.getItemOriginalFieldName() != null)
                     .collect(Collectors.toMap(
                             e -> e.getItemSourcePath() + "::" + e.getItemOriginalFieldName(),
@@ -117,19 +127,86 @@ public class EnrichmentPipelineService {
             changedItems = itemsToEnrich.stream()
                     .filter(itemDetail -> {
                         String key = itemDetail.sourcePath + "::" + itemDetail.originalFieldName;
-                        String prev = previousTextByKey.get(key);
-                        return prev == null || !Objects.equals(prev, itemDetail.cleansedContent);
+                        String baselineHash = currentHashByKey.get(key);
+                        String currentHash = contentHashingService.hash(itemDetail.cleansedContent);
+                        if (baselineHash != null && currentHash != null) {
+                            return !Objects.equals(baselineHash, currentHash);
+                        }
+                        String baselineText = currentTextByKey.get(key);
+                        return baselineText == null || !Objects.equals(baselineText, itemDetail.cleansedContent);
                     })
                     .collect(Collectors.toList());
         } else {
-            // First run (or missing version info): fall back to global existence check.
-            changedItems = itemsToEnrich.stream()
-                    .filter(itemDetail -> !enrichedContentElementRepository
-                            .existsByItemSourcePathAndItemOriginalFieldNameAndCleansedText(
-                                    itemDetail.sourcePath,
-                                    itemDetail.originalFieldName,
-                                    itemDetail.cleansedContent))
-                    .collect(Collectors.toList());
+            Integer currentVersion = cleansedDataEntry.getVersion();
+            Integer previousVersion = (currentVersion != null && currentVersion > 1) ? currentVersion - 1 : null;
+            if (previousVersion != null && cleansedDataEntry.getSourceUri() != null) {
+                List<com.apple.springboot.model.EnrichedContentElement> previousElements =
+                        enrichedContentElementRepository.findAllBySourceUriAndVersion(cleansedDataEntry.getSourceUri(), previousVersion);
+                Map<String, String> previousHashByKey = previousElements.stream()
+                        .filter(e -> e.getItemSourcePath() != null && e.getItemOriginalFieldName() != null)
+                        .collect(Collectors.toMap(
+                                e -> e.getItemSourcePath() + "::" + e.getItemOriginalFieldName(),
+                                com.apple.springboot.model.EnrichedContentElement::getContentHash,
+                                (a, b) -> a
+                        ));
+                Map<String, String> previousTextByKey = previousElements.stream()
+                        .filter(e -> e.getItemSourcePath() != null && e.getItemOriginalFieldName() != null)
+                        .collect(Collectors.toMap(
+                                e -> e.getItemSourcePath() + "::" + e.getItemOriginalFieldName(),
+                                com.apple.springboot.model.EnrichedContentElement::getCleansedText,
+                                (a, b) -> a
+                        ));
+                changedItems = itemsToEnrich.stream()
+                        .filter(itemDetail -> {
+                            String key = itemDetail.sourcePath + "::" + itemDetail.originalFieldName;
+                            String currentHash = contentHashingService.hash(itemDetail.cleansedContent);
+                            String prevHash = previousHashByKey.get(key);
+                            if (prevHash != null && currentHash != null) {
+                                return !Objects.equals(prevHash, currentHash);
+                            }
+                            // Back-compat: older rows won’t have hashes yet
+                            String prev = previousTextByKey.get(key);
+                            return prev == null || !Objects.equals(prev, itemDetail.cleansedContent);
+                        })
+                        .collect(Collectors.toList());
+            } else {
+                // First run (or missing version info): fall back to existence check.
+                // Prefer scoped-by-sourceUri when available to avoid cross-source false negatives.
+                changedItems = itemsToEnrich.stream()
+                        .filter(itemDetail -> {
+                            String currentHash = contentHashingService.hash(itemDetail.cleansedContent);
+                            String sourceUri = cleansedDataEntry.getSourceUri();
+                            if (sourceUri != null && currentHash != null) {
+                                return !enrichedContentElementRepository
+                                        .existsBySourceUriAndItemSourcePathAndItemOriginalFieldNameAndContentHash(
+                                                sourceUri,
+                                                itemDetail.sourcePath,
+                                                itemDetail.originalFieldName,
+                                                currentHash);
+                            }
+                            if (currentHash != null) {
+                                return !enrichedContentElementRepository
+                                        .existsByItemSourcePathAndItemOriginalFieldNameAndContentHash(
+                                                itemDetail.sourcePath,
+                                                itemDetail.originalFieldName,
+                                                currentHash);
+                            }
+                            if (sourceUri != null) {
+                                return !enrichedContentElementRepository
+                                        .existsBySourceUriAndItemSourcePathAndItemOriginalFieldNameAndCleansedText(
+                                                sourceUri,
+                                                itemDetail.sourcePath,
+                                                itemDetail.originalFieldName,
+                                                itemDetail.cleansedContent);
+                            }
+                            return !enrichedContentElementRepository
+                                    .existsByItemSourcePathAndItemOriginalFieldNameAndCleansedText(
+                                            itemDetail.sourcePath,
+                                            itemDetail.originalFieldName,
+                                            itemDetail.cleansedContent);
+                        })
+                        .collect(Collectors.toList());
+            }
         }
 
         logger.info("After change-detection filtering, {} items remain for processing (CleansedDataStore ID {}).",

@@ -28,13 +28,16 @@ public class EnrichmentPersistenceService {
     private final EnrichedContentElementRepository enrichedContentElementRepository;
     private final ObjectMapper objectMapper;
     private final EntityManager entityManager;
+    private final ContentHashingService contentHashingService;
 
     public EnrichmentPersistenceService(EnrichedContentElementRepository enrichedContentElementRepository,
                                         ObjectMapper objectMapper,
-                                        EntityManager entityManager) {
+                                        EntityManager entityManager,
+                                        ContentHashingService contentHashingService) {
         this.enrichedContentElementRepository = enrichedContentElementRepository;
         this.objectMapper = objectMapper;
         this.entityManager = entityManager;
+        this.contentHashingService = contentHashingService;
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -57,6 +60,7 @@ public class EnrichmentPersistenceService {
         }
 
         enrichedElement.setCleansedText(itemDetail.cleansedContent);
+        enrichedElement.setContentHash(contentHashingService.hash(itemDetail.cleansedContent));
         enrichedElement.setEnrichedAt(OffsetDateTime.now());
         enrichedElement.setContext(objectMapper.convertValue(itemDetail.context, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {}));
 
@@ -104,6 +108,7 @@ public class EnrichmentPersistenceService {
         }
 
         errorElement.setCleansedText(itemDetail.cleansedContent);
+        errorElement.setContentHash(contentHashingService.hash(itemDetail.cleansedContent));
         errorElement.setEnrichedAt(OffsetDateTime.now());
         errorElement.setStatus(status);
         errorElement.setContext(objectMapper.convertValue(itemDetail.context, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {}));
@@ -140,6 +145,7 @@ public class EnrichmentPersistenceService {
         }
 
         skippedElement.setCleansedText(itemDetail.cleansedContent);
+        skippedElement.setContentHash(contentHashingService.hash(itemDetail.cleansedContent));
         skippedElement.setEnrichedAt(OffsetDateTime.now());
         skippedElement.setStatus(status);
         skippedElement.setContext(objectMapper.convertValue(itemDetail.context, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {}));
