@@ -81,9 +81,6 @@ public class EnrichedContentElement {
     @Column(name = "content_hash", columnDefinition = "TEXT")
     private String contentHash;
 
-    @Column(name = "context_hash", columnDefinition = "TEXT")
-    private String contextHash;
-
     // Constructors
     public EnrichedContentElement() {
     }
