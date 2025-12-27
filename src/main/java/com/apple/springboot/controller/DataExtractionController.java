@@ -2,10 +2,8 @@ package com.apple.springboot.controller;
 
 import com.apple.springboot.dto.CleansedItemRow;
 import com.apple.springboot.dto.CleansedItemsResponse;
-import com.apple.springboot.dto.CleansedItemUpdateRequest;
 import com.apple.springboot.model.CleansedDataStore;
 import com.apple.springboot.repository.CleansedDataStoreRepository;
-import com.apple.springboot.service.CleansedItemEditService;
 import com.apple.springboot.service.DataIngestionService;
 import com.apple.springboot.service.EnrichmentPipelineService;
 import com.apple.springboot.service.EnrichmentReadService;
@@ -28,7 +26,6 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -43,7 +40,6 @@ public class DataExtractionController {
     private final DataIngestionService dataIngestionService;
     private final EnrichmentPipelineService enrichmentPipelineService;
     private final EnrichmentReadService enrichmentReadService;
-    private final CleansedItemEditService cleansedItemEditService;
 
     private final CleansedDataStoreRepository cleansedDataStoreRepository;
     private final ObjectMapper objectMapper;
@@ -68,14 +64,12 @@ public class DataExtractionController {
                                     EnrichmentReadService enrichmentReadService,
                                     CleansedDataStoreRepository cleansedDataStoreRepository,
                                     ObjectMapper objectMapper,
-                                    CleansedItemEditService cleansedItemEditService,
                                     @Value("${app.ingestion.excluded-item-types:}") String excludedItemTypesProperty) {
         this.dataIngestionService = dataIngestionService;
         this.enrichmentPipelineService = enrichmentPipelineService;
         this.enrichmentReadService = enrichmentReadService;
         this.cleansedDataStoreRepository = cleansedDataStoreRepository;
         this.objectMapper = objectMapper;
-        this.cleansedItemEditService = cleansedItemEditService;
         this.excludedItemTypes = parseExcludedItemTypes(excludedItemTypesProperty);
     }
     @GetMapping("/hello")
@@ -241,127 +235,6 @@ public class DataExtractionController {
         return ResponseEntity.ok(new CleansedItemsResponse(rows));
     }
 
-    @Operation(
-            summary = "Update a single cleansed item (manual edit)",
-            description = "Updates one item inside cleansed_items for a given CleansedDataStore. "
-                    + "This endpoint updates cleansedContent + hashes so enrichment change detection can pick it up. "
-                    + "Optionally triggers enrichment immediately."
-    )
-    @ApiResponses(value = {
-            @ApiResponse(responseCode = "200", description = "Item updated successfully"),
-            @ApiResponse(responseCode = "404", description = "Cleansed record or item not found"),
-            @ApiResponse(responseCode = "400", description = "Bad request"),
-            @ApiResponse(responseCode = "500", description = "Internal server error")
-    })
-    @PatchMapping("/cleansed-items/{id}/item")
-    public ResponseEntity<?> updateCleansedItem(
-            @Parameter(description = "UUID of the cleansed data entry", required = true)
-            @PathVariable("id") UUID cleansedDataStoreId,
-            @RequestBody CleansedItemUpdateRequest request) {
-        try {
-            if (request == null) {
-                return ResponseEntity.badRequest().body(Map.of("error", "Request body is required"));
-            }
-            CleansedDataStore updated = cleansedItemEditService.updateSingleItem(
-                    cleansedDataStoreId,
-                    request.sourcePath(),
-                    request.fieldName(),
-                    request.originalValue()
-            );
-
-            boolean trigger = Boolean.TRUE.equals(request.triggerEnrichment());
-            if (trigger) {
-                return triggerEnrichmentAsync(updated, "manual-item-edit");
-            }
-
-            return ResponseEntity.ok(Map.of(
-                    "cleansedDataStoreId", updated.getId().toString(),
-                    "status", normalizeStatus(updated.getStatus()),
-                    "message", "Item updated. Call POST /api/enrichment/start/" + updated.getId() + " to enrich."
-            ));
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", e.getMessage()));
-        } catch (Exception e) {
-            logger.error("Failed to update cleansed item for {}: {}", cleansedDataStoreId, e.getMessage(), e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of("error", e.getMessage()));
-        }
-    }
-
-    @Operation(
-            summary = "Diff cleansed items between two cleansed IDs",
-            description = "Compares stored cleansed_items between two CleansedDataStore IDs and returns a list of changed keys. "
-                    + "This is useful for debugging why enrichment change detection found 0 items."
-    )
-    @ApiResponses(value = {
-            @ApiResponse(responseCode = "200", description = "Diff computed successfully"),
-            @ApiResponse(responseCode = "404", description = "One or both cleansed records not found")
-    })
-    @GetMapping("/cleansed-items/diff")
-    public ResponseEntity<?> diffCleansedItems(
-            @Parameter(description = "Base CleansedDataStore ID", required = true)
-            @RequestParam("from") UUID fromId,
-            @Parameter(description = "Compare-to CleansedDataStore ID", required = true)
-            @RequestParam("to") UUID toId,
-            @RequestParam(value = "limit", defaultValue = "50") int limit) {
-
-        Optional<CleansedDataStore> fromOpt = cleansedDataStoreRepository.findById(fromId);
-        Optional<CleansedDataStore> toOpt = cleansedDataStoreRepository.findById(toId);
-        if (fromOpt.isEmpty() || toOpt.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(Map.of("error", "One or both CleansedDataStore records not found", "from", String.valueOf(fromId), "to", String.valueOf(toId)));
-        }
-
-        CleansedDataStore from = fromOpt.get();
-        CleansedDataStore to = toOpt.get();
-
-        Map<String, Map<String, Object>> fromIndex = indexCleansedItems(from.getCleansedItems());
-        Map<String, Map<String, Object>> toIndex = indexCleansedItems(to.getCleansedItems());
-
-        Set<String> keys = new LinkedHashSet<>();
-        keys.addAll(fromIndex.keySet());
-        keys.addAll(toIndex.keySet());
-
-        List<Map<String, Object>> changed = new ArrayList<>();
-        for (String key : keys) {
-            Map<String, Object> a = fromIndex.get(key);
-            Map<String, Object> b = toIndex.get(key);
-            String aText = pickString(a, "cleansedContent", "cleansedValue");
-            String bText = pickString(b, "cleansedContent", "cleansedValue");
-            if (!Objects.equals(aText, bText)) {
-                changed.add(Map.of(
-                        "key", key,
-                        "sourcePath", pickString(b != null ? b : a, "sourcePath"),
-                        "field", pickString(b != null ? b : a, "originalFieldName", "itemType"),
-                        "from", safeSnippet(aText),
-                        "to", safeSnippet(bText)
-                ));
-                if (changed.size() >= Math.max(1, limit)) break;
-            }
-        }
-
-        return ResponseEntity.ok(Map.of(
-                "fromId", fromId.toString(),
-                "toId", toId.toString(),
-                "fromStatus", normalizeStatus(from.getStatus()),
-                "toStatus", normalizeStatus(to.getStatus()),
-                "changedCountShown", changed.size(),
-                "changed", changed
-        ));
-    }
-
-    private Map<String, Map<String, Object>> indexCleansedItems(List<Map<String, Object>> items) {
-        Map<String, Map<String, Object>> index = new LinkedHashMap<>();
-        if (items == null) return index;
-        for (Map<String, Object> item : items) {
-            if (item == null) continue;
-            String sourcePath = pickString(item, "sourcePath");
-            String field = pickString(item, "originalFieldName", "itemType");
-            if (sourcePath == null || field == null) continue;
-            index.put(sourcePath + "::" + field, item);
-        }
-        return index;
-    }
-
     private String pickString(Map<String, Object> item, String... keys) {
         if (item == null) return null;
         for (String k : keys) {
@@ -369,13 +242,6 @@ public class DataExtractionController {
             if (v instanceof String s && !s.isBlank()) return s;
         }
         return null;
-    }
-
-    private String safeSnippet(String s) {
-        if (s == null) return null;
-        int max = 180;
-        String trimmed = s.strip();
-        return trimmed.length() <= max ? trimmed : trimmed.substring(0, max) + "...";
     }
 
     private boolean shouldHideFromCleansedItemsView(Map<String, Object> item) {

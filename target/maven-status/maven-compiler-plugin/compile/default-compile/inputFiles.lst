@@ -61,12 +61,10 @@
 /workspace/src/main/java/com/apple/springboot/config/SqsConfig.java
 /workspace/src/main/java/com/apple/springboot/repository/ContentChunkRepositoryImpl.java
 /workspace/src/main/java/com/apple/springboot/repository/ContentHashRepository.java
-/workspace/src/main/java/com/apple/springboot/dto/CleansedItemUpdateRequest.java
 /workspace/src/main/java/com/apple/springboot/model/SearchRequest.java
 /workspace/src/main/java/com/apple/springboot/repository/CleansedDataStoreRepository.java
 /workspace/src/main/java/com/apple/springboot/service/EnrichmentFinalizationService.java
 /workspace/src/main/java/com/apple/springboot/model/CleansedItemDetail.java
-/workspace/src/main/java/com/apple/springboot/service/CleansedItemEditService.java
 /workspace/src/main/java/com/apple/springboot/service/QueryInterpretationService.java
 /workspace/src/main/java/com/apple/springboot/config/OpenApiConfig.java
 /workspace/src/main/java/com/apple/springboot/service/ConsolidatedSectionService.java

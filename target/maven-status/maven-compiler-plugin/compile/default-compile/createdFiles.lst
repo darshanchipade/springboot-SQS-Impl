@@ -31,7 +31,6 @@ com/apple/springboot/model/CleansedItemDetail.class
 com/apple/springboot/service/SqsService.class
 com/apple/springboot/service/ConsolidatedSectionService.class
 com/apple/springboot/model/ContentChunk.class
-com/apple/springboot/service/CleansedItemEditService.class
 com/apple/springboot/controller/ChatbotController.class
 com/apple/springboot/repository/ContentChunkRepositoryCustom.class
 com/apple/springboot/model/Facets.class
@@ -76,7 +75,6 @@ com/apple/springboot/dto/CleansedItemRow.class
 com/apple/springboot/model/ContentChunk$ContentChunkBuilder.class
 com/apple/springboot/model/SearchRequest.class
 com/apple/springboot/controller/SearchController.class
-com/apple/springboot/dto/CleansedItemUpdateRequest.class
 com/apple/springboot/dto/CleansedContextResponse$Metadata.class
 com/apple/springboot/model/QueryInterpretation.class
 com/apple/springboot/model/ContentHashId.class
