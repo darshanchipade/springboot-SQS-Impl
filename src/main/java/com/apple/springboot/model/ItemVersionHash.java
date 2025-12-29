@@ -51,7 +51,14 @@ public class ItemVersionHash {
     @Column(name = "context_hash", columnDefinition = "TEXT")
     private String contextHash;
 
-    @Column(name = "created_at", nullable = false)
+    /**
+     * Creation timestamp.
+     *
+     * Important: marked {@code updatable=false} so that repeat saves (merge/update)
+     * for the same composite key (e.g. resume/replay of the same version) never try
+     * to overwrite this column with null.
+     */
+    @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;
 
     @Column(name = "updated_at", nullable = false)
