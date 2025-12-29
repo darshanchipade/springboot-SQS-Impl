@@ -7,7 +7,6 @@ import com.apple.springboot.model.EnrichedContentElement;
 import com.apple.springboot.repository.ConsolidatedEnrichedSectionRepository;
 import com.apple.springboot.repository.ContentHashRepository;
 import com.apple.springboot.repository.EnrichedContentElementRepository;
-import jakarta.persistence.EntityManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -24,17 +23,14 @@ public class ConsolidatedSectionService {
     private final EnrichedContentElementRepository enrichedRepo;
     private final ConsolidatedEnrichedSectionRepository consolidatedRepo;
     private final ContentHashRepository contentHashRepository;
-    private final EntityManager entityManager;
     private static final String USAGE_REF_DELIM = " ::ref:: ";
 
     public ConsolidatedSectionService(EnrichedContentElementRepository enrichedRepo,
                                       ConsolidatedEnrichedSectionRepository consolidatedRepo,
-                                      ContentHashRepository contentHashRepository,
-                                      EntityManager entityManager) {
+                                      ContentHashRepository contentHashRepository) {
         this.enrichedRepo = enrichedRepo;
         this.consolidatedRepo = consolidatedRepo;
         this.contentHashRepository = contentHashRepository;
-        this.entityManager = entityManager;
     }
 
     @Transactional
@@ -45,12 +41,6 @@ public class ConsolidatedSectionService {
         // Build an index of all usagePaths per (sourcePath, originalFieldName). We prefer harvesting from
         // persisted `content_hashes` so consolidation remains correct even when `cleansed_items` only contains deltas.
         Map<String, Set<String>> usageIndex = buildUsageIndex(cleansedData, enrichedItems);
-
-        List<Object[]> counts = entityManager.createNativeQuery(
-                        "select status, count(*) from enriched_content_elements where cleansed_data_id = :id group by status")
-                .setParameter("id", cleansedData.getId())
-                .getResultList();
-        logger.info("Debug: DB counts for {} -> {}", cleansedData.getId(), counts);
 
         for (EnrichedContentElement item : enrichedItems) {
             if (item.getItemSourcePath() == null || item.getCleansedText() == null) {
