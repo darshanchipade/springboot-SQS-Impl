@@ -195,16 +195,25 @@ public class EnrichmentProcessor {
     }
 
     private void checkCompletion(CleansedDataStore cleansedDataEntry) {
-        // expected = unique items by (sourcePath, originalFieldName)
-        long expected = cleansedDataEntry.getCleansedItems().stream()
-                .map(item -> ((String) item.get("sourcePath")) + "::" + ((String) item.get("originalFieldName")))
-                .distinct()
-                .count();
+        // Prefer persisted expected count (restart-safe, and correct for delta runs).
+        long expected;
+        Integer persistedExpected = cleansedDataEntry.getEnrichmentExpectedCount();
+        if (persistedExpected != null && persistedExpected > 0) {
+            expected = persistedExpected;
+        } else if (persistedExpected != null && persistedExpected == 0) {
+            expected = 0;
+        } else {
+            // Back-compat fallback: expected = unique items by (sourcePath, originalFieldName)
+            expected = cleansedDataEntry.getCleansedItems().stream()
+                    .map(item -> ((String) item.get("sourcePath")) + "::" + ((String) item.get("originalFieldName")))
+                    .distinct()
+                    .count();
+        }
 
         long processedCount = enrichedContentElementRepository.countByCleansedDataId(cleansedDataEntry.getId());
 
         logger.info("Completion check for {}: processed={} expected={}", cleansedDataEntry.getId(), processedCount, expected);
-        if (processedCount >= expected) {
+        if (expected == 0 || processedCount >= expected) {
             logger.info("All items for CleansedDataStore ID {} processed. Running finalization.", cleansedDataEntry.getId());
             runFinalizationSteps(cleansedDataEntry);
         }

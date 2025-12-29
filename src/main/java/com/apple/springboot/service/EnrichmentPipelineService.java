@@ -215,6 +215,7 @@ public class EnrichmentPipelineService {
         if (changedItems.isEmpty()) {
             logger.info("No items require enrichment for CleansedDataStore ID: {}. Marking as ENRICHED_NO_ITEMS_TO_PROCESS.", cleansedDataStoreId);
             cleansedDataEntry.setStatus("ENRICHED_NO_ITEMS_TO_PROCESS");
+            cleansedDataEntry.setEnrichmentExpectedCount(0);
             cleansedDataStoreRepository.save(cleansedDataEntry);
             return;
         }
@@ -228,6 +229,9 @@ public class EnrichmentPipelineService {
 
         logger.info("Split {} items into {} to queue and {} to skip enrichment for CleansedDataStore ID {}.",
                 changedItems.size(), itemsToQueue.size(), skippedItems.size(), cleansedDataStoreId);
+        // Persist expected count for restart-safe completion/finalization.
+        cleansedDataEntry.setEnrichmentExpectedCount(changedItems.size());
+        cleansedDataStoreRepository.save(cleansedDataEntry);
         progressService.startTracking(cleansedDataStoreId, changedItems.size());
 
         if (useSqs) {
