@@ -28,6 +28,24 @@ GRANT ALL PRIVILEGES ON SCHEMA public TO yugabyte;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO yugabyte;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO yugabyte;
 
+-- Optional (recommended if you run with ddl-auto=validate/none):
+-- Persist per-item hashes per (sourceUri, version) for safe delta computation fallback.
+CREATE TABLE IF NOT EXISTS item_version_hashes (
+    source_uri   TEXT        NOT NULL,
+    version      INTEGER     NOT NULL,
+    source_path  TEXT        NOT NULL,
+    item_type    TEXT        NOT NULL,
+    usage_path   TEXT        NOT NULL,
+    content_hash TEXT        NOT NULL,
+    context_hash TEXT        NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (source_uri, version, source_path, item_type, usage_path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_item_version_hashes_source_version
+    ON item_version_hashes (source_uri, version);
+
 -- Verify
 \du
 \l
