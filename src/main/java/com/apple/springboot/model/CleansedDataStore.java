@@ -54,6 +54,16 @@ public class CleansedDataStore {
     @Column(name = "version")
     private Integer version;
 
+    /**
+     * Expected number of items for enrichment completion for this CleansedDataStore run.
+     *
+     * This is persisted so that if the service restarts and loses in-memory completion tracking,
+     * we can still determine when to finalize (especially important for delta runs where only a
+     * subset of the total cleansed items are queued).
+     */
+    @Column(name = "enrichment_expected_count")
+    private Integer enrichmentExpectedCount;
+
 //    @Column(name = "content_hash")
 //    private String contentHash;
 
