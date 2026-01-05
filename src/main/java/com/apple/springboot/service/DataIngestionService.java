@@ -989,7 +989,17 @@ public class DataIngestionService {
 
     private Envelope buildCurrentEnvelope(JsonNode currentNode, Envelope parentEnvelope) {
         Envelope currentEnvelope = new Envelope();
-        String path = currentNode.has("_path") ? currentNode.get("_path").asText(parentEnvelope.getSourcePath()) : parentEnvelope.getSourcePath();
+        // Prefer JSON `_path` when it's a real CMS/content path, but do NOT let it override the
+        // ingestion source identifier when `_path` is itself a synthetic source label (e.g. "file-upload:...").
+        // This keeps derived keys (content_hashes / item_version_hashes) consistent with Raw/Cleansed stores.
+        String parentPath = parentEnvelope != null ? parentEnvelope.getSourcePath() : null;
+        String path = parentPath;
+        if (currentNode != null && currentNode.has("_path")) {
+            String candidate = currentNode.get("_path").asText(null);
+            if (candidate != null && !candidate.isBlank() && !candidate.startsWith("file-upload:")) {
+                path = candidate;
+            }
+        }
         currentEnvelope.setSourcePath(path);
         currentEnvelope.setModel(currentNode.path("_model").asText(parentEnvelope.getModel()));
         currentEnvelope.setUsagePath(currentNode.path("_usagePath").asText(parentEnvelope.getUsagePath()));
