@@ -63,6 +63,7 @@ public class DataIngestionService {
     private final S3StorageService s3StorageService;
     private final String defaultS3BucketName;
     private final ContentHashRepository contentHashRepository;
+    private final ItemVersionHashStore itemVersionHashStore;
     private final ContextUpdateService contextUpdateService;
     private final Set<String> excludedItemTypes;
 
@@ -86,6 +87,14 @@ public class DataIngestionService {
     @Value("${app.ingestion.debug-counters:true}")
     private boolean debugCountersEnabled;
 
+    // If true, persist per-item hashes per (sourceUri, version) into item_version_hashes
+    @Value("${app.ingestion.persist-version-hashes:true}")
+    private boolean persistVersionHashes;
+
+    // If true, prefer item_version_hashes for delta comparison (fallback remains intact)
+    @Value("${app.ingestion.use-persisted-version-hashes:true}")
+    private boolean usePersistedVersionHashes;
+
     // Copy cleansing patterns
     private static final Pattern NBSP_PATTERN = Pattern.compile("\\{%nbsp%\\}");
     private static final Pattern SOSUMI_PATTERN = Pattern.compile("\\{%sosumi type=\"[^\"]+\" metadata=\"\\d+\"%\\}");
@@ -102,6 +111,7 @@ public class DataIngestionService {
     public DataIngestionService(RawDataStoreRepository rawDataStoreRepository,
                                 CleansedDataStoreRepository cleansedDataStoreRepository,
                                 ContentHashRepository contentHashRepository,
+                                ItemVersionHashStore itemVersionHashStore,
                                 ObjectMapper objectMapper,
                                 ResourceLoader resourceLoader,
                                 @Value("${app.json.file.path}") String jsonFilePath,
@@ -112,6 +122,7 @@ public class DataIngestionService {
         this.rawDataStoreRepository = rawDataStoreRepository;
         this.cleansedDataStoreRepository = cleansedDataStoreRepository;
         this.contentHashRepository = contentHashRepository;
+        this.itemVersionHashStore = itemVersionHashStore;
         this.contextUpdateService = contextUpdateService;
         this.objectMapper = objectMapper;
         this.resourceLoader = resourceLoader;
@@ -516,11 +527,15 @@ public class DataIngestionService {
             if (returnAllItems || forceFullRun) {
                 // Still persist the latest observed hashes so subsequent runs can correctly compute deltas.
                 persistItemHashes(allExtractedItems);
+                // Also persist hashes for this specific version (optional; safe fallback if table missing).
+                persistItemVersionHashes(allExtractedItems, rawDataStore);
                 itemsToProcess = allExtractedItems;
             } else {
                 itemsToProcess = filterForChangedItemsAgainstPreviousRaw(allExtractedItems, rawDataStore);
                 // Always persist latest hashes for future runs.
                 persistItemHashes(allExtractedItems);
+                // Also persist hashes for this specific version (optional; safe fallback if table missing).
+                persistItemVersionHashes(allExtractedItems, rawDataStore);
             }
 
             if (debugCountersEnabled) {
@@ -667,6 +682,41 @@ public class DataIngestionService {
             return filterForChangedItems(allItems);
         }
 
+        // Prefer persisted per-item hashes for the previous version (fast + does not depend on raw JSON retention).
+        if (usePersistedVersionHashes) {
+            Integer prevVersion = prevOpt.get().getVersion();
+            List<ItemVersionHash> prevHashes = itemVersionHashStore.safeLoad(currentRaw.getSourceUri(), prevVersion);
+            if (prevHashes != null && !prevHashes.isEmpty()) {
+                Map<String, ItemVersionHash> prevIndex = new HashMap<>(Math.max(16, prevHashes.size() * 2));
+                for (ItemVersionHash h : prevHashes) {
+                    if (h == null || h.getSourcePath() == null || h.getItemType() == null) continue;
+                    prevIndex.put(exactKey(h.getSourcePath(), h.getItemType(), h.getUsagePath()), h);
+                }
+
+                List<Map<String, Object>> changed = new ArrayList<>();
+                for (Map<String, Object> item : allItems) {
+                    String sourcePath = (String) item.get("sourcePath");
+                    String itemType = (String) item.get("itemType");
+                    String usagePath = (String) item.get("usagePath");
+                    if (sourcePath == null || itemType == null) continue;
+
+                    ItemVersionHash prev = prevIndex.get(exactKey(sourcePath, itemType, usagePath));
+                    String newContentHash = (String) item.get("contentHash");
+                    String newContextHash = (String) item.get("contextHash");
+                    String oldContentHash = prev != null ? prev.getContentHash() : null;
+                    String oldContextHash = prev != null ? prev.getContextHash() : null;
+
+                    boolean contentChanged = prev == null || !Objects.equals(oldContentHash, newContentHash);
+                    boolean contextChanged = considerContextChange && (prev == null || !Objects.equals(oldContextHash, newContextHash));
+                    if (contentChanged || contextChanged) {
+                        changed.add(item);
+                    }
+                }
+
+                return changed;
+            }
+        }
+
         String prevRaw = prevOpt.get().getRawContentText();
         if ((prevRaw == null || prevRaw.isBlank()) && prevOpt.get().getRawContentBinary() != null) {
             prevRaw = new String(prevOpt.get().getRawContentBinary(), StandardCharsets.UTF_8);
@@ -748,6 +798,49 @@ public class DataIngestionService {
         }
         if (!toSave.isEmpty()) {
             contentHashRepository.saveAll(toSave);
+        }
+    }
+
+    /**
+     * Persists per-item hashes per (sourceUri, version). This is additive and best-effort:
+     * - If the backing table isn't present yet, we swallow the failure and keep the pipeline running.
+     * - Delta comparison will fall back to the previous-raw comparison path.
+     */
+    private void persistItemVersionHashes(List<Map<String, Object>> allItems, RawDataStore rawDataStore) {
+        if (!persistVersionHashes) {
+            return;
+        }
+        if (rawDataStore == null || rawDataStore.getSourceUri() == null || rawDataStore.getVersion() == null) {
+            return;
+        }
+        if (allItems == null || allItems.isEmpty()) {
+            return;
+        }
+
+        List<ItemVersionHash> toSave = new ArrayList<>(allItems.size());
+        for (Map<String, Object> item : allItems) {
+            if (item == null) continue;
+            String sourcePath = (String) item.get("sourcePath");
+            String itemType = (String) item.get("itemType");
+            String usagePath = (String) item.get("usagePath");
+            String contentHash = (String) item.get("contentHash");
+            String contextHash = (String) item.get("contextHash");
+            if (sourcePath == null || itemType == null || contentHash == null) continue;
+
+            String up = (usagePath == null) ? "" : usagePath;
+            toSave.add(new ItemVersionHash(
+                    rawDataStore.getSourceUri(),
+                    rawDataStore.getVersion(),
+                    sourcePath,
+                    itemType,
+                    up,
+                    contentHash,
+                    contextHash
+            ));
+        }
+
+        if (!toSave.isEmpty()) {
+            itemVersionHashStore.safeSaveAll(toSave);
         }
     }
 
