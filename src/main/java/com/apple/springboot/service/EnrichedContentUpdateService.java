@@ -37,6 +37,9 @@ public class EnrichedContentUpdateService {
     private static final Logger logger = LoggerFactory.getLogger(EnrichedContentUpdateService.class);
     private static final String USAGE_REF_DELIM = " ::ref:: ";
     private static final Set<String> SUPPORTED_FIELDS = Set.of("summary", "classification", "keywords", "tags");
+    private static final String SOURCE_AI = "AI";
+    private static final String SOURCE_USER = "USER";
+    private static final String SOURCE_REGENERATE = "REGENERATE";
 
     private final EnrichedContentElementRepository elementRepository;
     private final EnrichedContentRevisionRepository revisionRepository;
@@ -69,7 +72,7 @@ public class EnrichedContentUpdateService {
         applyUpdates(element, updatedFields);
         elementRepository.save(element);
 
-        EnrichedContentRevision revision = recordRevision(element, updatedFields, "USER_EDIT", buildMetadata(request, updatedFields));
+        EnrichedContentRevision revision = recordRevision(element, updatedFields, SOURCE_USER, buildMetadata(request, updatedFields));
         syncConsolidatedSections(element, updatedFields);
 
         return buildResponse(element, revision);
@@ -101,7 +104,7 @@ public class EnrichedContentUpdateService {
         metadata.put("requestedFields", new ArrayList<>(fieldsToUpdate));
         metadata.put("updatedFields", updatedFields.updatedFields);
         metadata.put("modelUsed", updatedFields.modelUsed);
-        EnrichedContentRevision revision = recordRevision(element, updatedFields, "BEDROCK_REGENERATE", metadata);
+        EnrichedContentRevision revision = recordRevision(element, updatedFields, SOURCE_REGENERATE, metadata);
         syncConsolidatedSections(element, updatedFields);
 
         return buildResponse(element, revision);
@@ -137,11 +140,12 @@ public class EnrichedContentUpdateService {
         elementRepository.save(element);
 
         Map<String, Object> metadata = new HashMap<>();
+        metadata.put("action", "RESTORE");
         metadata.put("restoredRevisionId", revision.getId());
         metadata.put("restoredRevision", revision.getRevision());
         metadata.put("restoredSource", revision.getSource());
         metadata.put("updatedFields", updatedFields.updatedFields);
-        EnrichedContentRevision newRevision = recordRevision(element, updatedFields, "RESTORE", metadata);
+        EnrichedContentRevision newRevision = recordRevision(element, updatedFields, SOURCE_USER, metadata);
         syncConsolidatedSections(element, updatedFields);
 
         return buildResponse(element, newRevision);
@@ -203,6 +207,7 @@ public class EnrichedContentUpdateService {
         Integer maxRevision = revisionRepository.findMaxRevisionForElement(element.getId());
         int nextRevision = Optional.ofNullable(maxRevision).orElse(0) + 1;
 
+        String normalizedSource = normalizeSource(source);
         EnrichedContentRevision revision = EnrichedContentRevision.builder()
                 .enrichedContentElementId(element.getId())
                 .cleansedDataId(element.getCleansedDataId())
@@ -211,13 +216,30 @@ public class EnrichedContentUpdateService {
                 .classification(updatedFields.classification)
                 .keywords(updatedFields.keywords)
                 .tags(updatedFields.tags)
-                .source(source)
+                .source(normalizedSource)
                 .modelUsed(updatedFields.modelUsed)
                 .metadata(metadata)
                 .createdAt(OffsetDateTime.now())
                 .build();
         revisionRepository.save(revision);
         return revision;
+    }
+
+    private String normalizeSource(String source) {
+        if (source == null || source.isBlank()) {
+            return SOURCE_USER;
+        }
+        String normalized = source.trim().toUpperCase();
+        if (normalized.contains("USER") || normalized.contains("RESTORE")) {
+            return SOURCE_USER;
+        }
+        if (normalized.contains("REGENERATE")) {
+            return SOURCE_REGENERATE;
+        }
+        if (normalized.equals(SOURCE_AI) || normalized.contains("AI")) {
+            return SOURCE_AI;
+        }
+        return SOURCE_USER;
     }
 
     private EnrichedContentUpdateResponse buildResponse(EnrichedContentElement element, EnrichedContentRevision revision) {
