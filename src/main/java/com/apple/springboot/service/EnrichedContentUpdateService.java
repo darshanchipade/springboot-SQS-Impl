@@ -107,6 +107,46 @@ public class EnrichedContentUpdateService {
         return buildResponse(element, revision);
     }
 
+    @Transactional(readOnly = true)
+    public List<EnrichedContentRevision> listRevisions(UUID elementId) {
+        EnrichedContentElement element = loadElement(elementId);
+        return revisionRepository.findAllByEnrichedContentElementIdOrderByRevisionDesc(element.getId());
+    }
+
+    @Transactional
+    public EnrichedContentUpdateResponse restoreFromRevision(UUID elementId, UUID revisionId) {
+        EnrichedContentElement element = loadElement(elementId);
+        EnrichedContentRevision revision = revisionRepository.findById(revisionId)
+                .orElseThrow(() -> new IllegalArgumentException("Revision not found for id " + revisionId));
+        if (!element.getId().equals(revision.getEnrichedContentElementId())) {
+            throw new IllegalArgumentException("Revision does not belong to enriched content element " + elementId);
+        }
+
+        UpdatedFields updatedFields = new UpdatedFields();
+        updatedFields.summary = normalizeText(revision.getSummary());
+        updatedFields.classification = normalizeText(revision.getClassification());
+        updatedFields.keywords = sanitizeList(revision.getKeywords());
+        updatedFields.tags = sanitizeList(revision.getTags());
+        updatedFields.modelUsed = revision.getModelUsed();
+        updatedFields.updatedFields = determineUpdatedFields(element, updatedFields);
+
+        applyUpdates(element, updatedFields);
+        if (revision.getModelUsed() != null) {
+            element.setBedrockModelUsed(revision.getModelUsed());
+        }
+        elementRepository.save(element);
+
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("restoredRevisionId", revision.getId());
+        metadata.put("restoredRevision", revision.getRevision());
+        metadata.put("restoredSource", revision.getSource());
+        metadata.put("updatedFields", updatedFields.updatedFields);
+        EnrichedContentRevision newRevision = recordRevision(element, updatedFields, "RESTORE", metadata);
+        syncConsolidatedSections(element, updatedFields);
+
+        return buildResponse(element, newRevision);
+    }
+
     private EnrichedContentElement loadElement(UUID elementId) {
         Optional<EnrichedContentElement> elementOpt = elementRepository.findById(elementId);
         if (elementOpt.isEmpty()) {
