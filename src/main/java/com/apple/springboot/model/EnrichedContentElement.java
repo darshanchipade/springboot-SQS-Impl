@@ -81,6 +81,12 @@ public class EnrichedContentElement {
     @Column(name = "content_hash", columnDefinition = "TEXT")
     private String contentHash;
 
+    @Column(name = "user_override_active")
+    private Boolean userOverrideActive;
+
+    @Column(name = "new_ai_available")
+    private Boolean newAiAvailable;
+
     // Constructors
     public EnrichedContentElement() {
     }

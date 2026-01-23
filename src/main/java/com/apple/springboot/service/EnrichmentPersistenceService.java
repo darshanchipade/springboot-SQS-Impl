@@ -3,7 +3,9 @@ package com.apple.springboot.service;
 import com.apple.springboot.model.CleansedItemDetail;
 import com.apple.springboot.model.CleansedDataStore;
 import com.apple.springboot.model.EnrichedContentElement;
+import com.apple.springboot.model.EnrichedContentRevision;
 import com.apple.springboot.repository.EnrichedContentElementRepository;
+import com.apple.springboot.repository.EnrichedContentRevisionRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityManager;
@@ -24,17 +26,21 @@ import java.util.UUID;
 public class EnrichmentPersistenceService {
 
     private static final Logger logger = LoggerFactory.getLogger(EnrichmentPersistenceService.class);
+    private static final String SOURCE_AI = "AI";
 
     private final EnrichedContentElementRepository enrichedContentElementRepository;
+    private final EnrichedContentRevisionRepository revisionRepository;
     private final ObjectMapper objectMapper;
     private final EntityManager entityManager;
     private final ContentHashingService contentHashingService;
 
     public EnrichmentPersistenceService(EnrichedContentElementRepository enrichedContentElementRepository,
+                                        EnrichedContentRevisionRepository revisionRepository,
                                         ObjectMapper objectMapper,
                                         EntityManager entityManager,
                                         ContentHashingService contentHashingService) {
         this.enrichedContentElementRepository = enrichedContentElementRepository;
+        this.revisionRepository = revisionRepository;
         this.objectMapper = objectMapper;
         this.entityManager = entityManager;
         this.contentHashingService = contentHashingService;
@@ -61,22 +67,39 @@ public class EnrichmentPersistenceService {
 
         enrichedElement.setCleansedText(itemDetail.cleansedContent);
         enrichedElement.setContentHash(contentHashingService.hash(itemDetail.cleansedContent));
-        enrichedElement.setEnrichedAt(OffsetDateTime.now());
+        OffsetDateTime enrichedAt = OffsetDateTime.now();
+        enrichedElement.setEnrichedAt(enrichedAt);
         enrichedElement.setContext(objectMapper.convertValue(itemDetail.context, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {}));
 
         @SuppressWarnings("unchecked")
         Map<String, Object> standardEnrichments = (Map<String, Object>) bedrockResponse.getOrDefault("standardEnrichments", bedrockResponse);
 
-        enrichedElement.setSummary((String) standardEnrichments.get("summary"));
-        enrichedElement.setSentiment((String) standardEnrichments.get("sentiment"));
-        enrichedElement.setClassification((String) standardEnrichments.get("classification"));
-        enrichedElement.setKeywords((List<String>) standardEnrichments.get("keywords"));
-        enrichedElement.setTags((List<String>) standardEnrichments.get("tags"));
-        enrichedElement.setBedrockModelUsed((String) bedrockResponse.get("enrichedWithModel"));
+        String summary = (String) standardEnrichments.get("summary");
+        String sentiment = (String) standardEnrichments.get("sentiment");
+        String classification = (String) standardEnrichments.get("classification");
+        @SuppressWarnings("unchecked")
+        List<String> keywords = (List<String>) standardEnrichments.get("keywords");
+        @SuppressWarnings("unchecked")
+        List<String> tags = (List<String>) standardEnrichments.get("tags");
+        String modelUsed = (String) bedrockResponse.get("enrichedWithModel");
+
+        boolean userOverrideActive = Boolean.TRUE.equals(enrichedElement.getUserOverrideActive());
+        if (!userOverrideActive) {
+            enrichedElement.setSummary(summary);
+            enrichedElement.setClassification(classification);
+            enrichedElement.setKeywords(keywords);
+            enrichedElement.setTags(tags);
+            enrichedElement.setBedrockModelUsed(modelUsed);
+            enrichedElement.setUserOverrideActive(false);
+            enrichedElement.setNewAiAvailable(false);
+        } else {
+            enrichedElement.setNewAiAvailable(true);
+        }
+        enrichedElement.setSentiment(sentiment);
         enrichedElement.setStatus(elementStatus);
         Map<String, Object> metadata = new HashMap<>();
-        metadata.put("enrichedWithModel", bedrockResponse.get("enrichedWithModel"));
-        metadata.put("enrichmentTimestamp", enrichedElement.getEnrichedAt().toString());
+        metadata.put("enrichedWithModel", modelUsed);
+        metadata.put("enrichmentTimestamp", enrichedAt.toString());
         try {
             enrichedElement.setEnrichmentMetadata(objectMapper.writeValueAsString(metadata));
         } catch (JsonProcessingException e) {
@@ -86,6 +109,7 @@ public class EnrichmentPersistenceService {
 
         enrichedContentElementRepository.save(enrichedElement);
         entityManager.flush();
+        recordAiRevision(enrichedElement, summary, classification, keywords, tags, modelUsed, !userOverrideActive, enrichedAt);
         logRowCount(parentEntry.getId(), "saveEnrichedElement");
         logger.info("Persisted {} status for CleansedDataStore ID {}", elementStatus, parentEntry.getId());
     }
@@ -164,6 +188,45 @@ public class EnrichmentPersistenceService {
         entityManager.flush();
         logRowCount(parentEntry.getId(), "saveSkippedEnrichedElement");
         logger.debug("Saved skipped enrichment element for item path: {}", itemDetail.sourcePath);
+    }
+
+    private void recordAiRevision(EnrichedContentElement element,
+                                  String summary,
+                                  String classification,
+                                  List<String> keywords,
+                                  List<String> tags,
+                                  String modelUsed,
+                                  boolean applied,
+                                  OffsetDateTime enrichedAt) {
+        if (element.getId() == null) {
+            return;
+        }
+        Integer maxRevision = revisionRepository.findMaxRevisionForElement(element.getId());
+        int nextRevision = Optional.ofNullable(maxRevision).orElse(0) + 1;
+
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("pipeline", true);
+        metadata.put("applied", applied);
+        metadata.put("modelUsed", modelUsed);
+        metadata.put("enrichedAt", enrichedAt != null ? enrichedAt.toString() : null);
+        if (!applied) {
+            metadata.put("blockedBy", "USER_OVERRIDE");
+        }
+
+        EnrichedContentRevision revision = EnrichedContentRevision.builder()
+                .enrichedContentElementId(element.getId())
+                .cleansedDataId(element.getCleansedDataId())
+                .revision(nextRevision)
+                .summary(summary)
+                .classification(classification)
+                .keywords(keywords)
+                .tags(tags)
+                .source(SOURCE_AI)
+                .modelUsed(modelUsed)
+                .metadata(metadata)
+                .createdAt(OffsetDateTime.now())
+                .build();
+        revisionRepository.save(revision);
     }
 
     private void logRowCount(UUID cleansedDataId, String context) {
