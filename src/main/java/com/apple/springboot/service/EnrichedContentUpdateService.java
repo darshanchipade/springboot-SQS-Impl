@@ -70,6 +70,8 @@ public class EnrichedContentUpdateService {
         EnrichedContentElement element = loadElement(elementId);
         UpdatedFields updatedFields = resolveManualUpdate(element, request);
         applyUpdates(element, updatedFields);
+        element.setUserOverrideActive(true);
+        element.setNewAiAvailable(false);
         elementRepository.save(element);
 
         EnrichedContentRevision revision = recordRevision(element, updatedFields, SOURCE_USER, buildMetadata(request, updatedFields));
@@ -98,6 +100,8 @@ public class EnrichedContentUpdateService {
 
         applyUpdates(element, updatedFields);
         element.setBedrockModelUsed(updatedFields.modelUsed);
+        element.setUserOverrideActive(false);
+        element.setNewAiAvailable(false);
         elementRepository.save(element);
 
         Map<String, Object> metadata = new HashMap<>();
@@ -137,6 +141,8 @@ public class EnrichedContentUpdateService {
         if (revision.getModelUsed() != null) {
             element.setBedrockModelUsed(revision.getModelUsed());
         }
+        element.setUserOverrideActive(true);
+        element.setNewAiAvailable(false);
         elementRepository.save(element);
 
         Map<String, Object> metadata = new HashMap<>();
