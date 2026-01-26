@@ -3,12 +3,14 @@ package com.apple.springboot.dto;
 import com.apple.springboot.model.EnrichedContentElement;
 
 import java.time.OffsetDateTime;
+import java.util.Map;
 import java.util.UUID;
 
 public class EnrichedContentUpdateResponse {
 
     private EnrichedContentElement element;
     private RevisionSnapshot revision;
+    private Map<String, Object> preview;
 
     public EnrichedContentUpdateResponse() {
     }
@@ -32,6 +34,14 @@ public class EnrichedContentUpdateResponse {
 
     public void setRevision(RevisionSnapshot revision) {
         this.revision = revision;
+    }
+
+    public Map<String, Object> getPreview() {
+        return preview;
+    }
+
+    public void setPreview(Map<String, Object> preview) {
+        this.preview = preview;
     }
 
     public static class RevisionSnapshot {

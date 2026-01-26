@@ -90,6 +90,7 @@ public class EnrichedContentUpdateService {
         if (fieldsToUpdate.isEmpty()) {
             fieldsToUpdate = SUPPORTED_FIELDS;
         }
+        boolean previewOnly = request != null && Boolean.TRUE.equals(request.getPreview());
 
         Map<String, Object> bedrockResponse = callBedrock(element);
         if (bedrockResponse.containsKey("error")) {
@@ -101,6 +102,20 @@ public class EnrichedContentUpdateService {
         UpdatedFields updatedFields = resolveGeneratedUpdate(element, standardEnrichments, fieldsToUpdate);
         updatedFields.modelUsed = bedrockEnrichmentService.getConfiguredModelId();
         boolean hasUpdates = updatedFields.updatedFields != null && !updatedFields.updatedFields.isEmpty();
+
+        if (previewOnly) {
+            Map<String, Object> previewPayload = new HashMap<>();
+            previewPayload.put("summary", updatedFields.summary);
+            previewPayload.put("classification", updatedFields.classification);
+            previewPayload.put("keywords", updatedFields.keywords);
+            previewPayload.put("tags", updatedFields.tags);
+            previewPayload.put("modelUsed", updatedFields.modelUsed);
+            previewPayload.put("updatedFields", updatedFields.updatedFields);
+
+            EnrichedContentUpdateResponse response = new EnrichedContentUpdateResponse(element, null);
+            response.setPreview(previewPayload);
+            return response;
+        }
 
         if (!hasUpdates) {
             element.setBedrockModelUsed(updatedFields.modelUsed);
