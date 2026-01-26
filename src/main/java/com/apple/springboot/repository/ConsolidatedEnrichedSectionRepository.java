@@ -27,6 +27,14 @@ public interface ConsolidatedEnrichedSectionRepository extends JpaRepository<Con
 
  List<ConsolidatedEnrichedSection> findAllByCleansedDataIdAndVersion(UUID cleansedDataId, Integer version);
 
+ List<ConsolidatedEnrichedSection> findAllByCleansedDataIdAndVersionAndOriginalFieldNameAndSectionPathAndSectionUri(
+         UUID cleansedDataId,
+         Integer version,
+         String originalFieldName,
+         String sectionPath,
+         String sectionUri
+ );
+
  @Transactional
  @Modifying
  @Query("update ConsolidatedEnrichedSection s set s.status = :status where s.cleansedDataId = :cleansedDataId and (:version is null or s.version = :version)")
