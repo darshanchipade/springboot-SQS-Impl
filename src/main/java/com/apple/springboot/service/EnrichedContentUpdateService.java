@@ -69,6 +69,9 @@ public class EnrichedContentUpdateService {
     public EnrichedContentUpdateResponse applyManualUpdate(UUID elementId, EnrichedContentUpdateRequest request) {
         EnrichedContentElement element = loadElement(elementId);
         UpdatedFields updatedFields = resolveManualUpdate(element, request);
+        if (updatedFields.updatedFields == null || updatedFields.updatedFields.isEmpty()) {
+            return buildResponse(element, findLatestRevision(element.getId()));
+        }
         applyUpdates(element, updatedFields);
         element.setUserOverrideActive(true);
         element.setNewAiAvailable(false);
@@ -97,6 +100,15 @@ public class EnrichedContentUpdateService {
         Map<String, Object> standardEnrichments = (Map<String, Object>) bedrockResponse.getOrDefault("standardEnrichments", bedrockResponse);
         UpdatedFields updatedFields = resolveGeneratedUpdate(element, standardEnrichments, fieldsToUpdate);
         updatedFields.modelUsed = bedrockEnrichmentService.getConfiguredModelId();
+        boolean hasUpdates = updatedFields.updatedFields != null && !updatedFields.updatedFields.isEmpty();
+
+        if (!hasUpdates) {
+            element.setBedrockModelUsed(updatedFields.modelUsed);
+            element.setUserOverrideActive(false);
+            element.setNewAiAvailable(false);
+            elementRepository.save(element);
+            return buildResponse(element, findLatestRevision(element.getId()));
+        }
 
         applyUpdates(element, updatedFields);
         element.setBedrockModelUsed(updatedFields.modelUsed);
@@ -249,6 +261,9 @@ public class EnrichedContentUpdateService {
     }
 
     private EnrichedContentUpdateResponse buildResponse(EnrichedContentElement element, EnrichedContentRevision revision) {
+        if (revision == null) {
+            return new EnrichedContentUpdateResponse(element, null);
+        }
         EnrichedContentUpdateResponse.RevisionSnapshot snapshot = new EnrichedContentUpdateResponse.RevisionSnapshot(
                 revision.getId(),
                 revision.getRevision(),
@@ -257,6 +272,14 @@ public class EnrichedContentUpdateService {
                 revision.getCreatedAt()
         );
         return new EnrichedContentUpdateResponse(element, snapshot);
+    }
+
+    private EnrichedContentRevision findLatestRevision(UUID elementId) {
+        if (elementId == null) {
+            return null;
+        }
+        return revisionRepository.findFirstByEnrichedContentElementIdOrderByRevisionDesc(elementId)
+                .orElse(null);
     }
 
     private Map<String, Object> buildMetadata(EnrichedContentUpdateRequest request, UpdatedFields fields) {
