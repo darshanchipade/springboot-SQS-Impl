@@ -69,6 +69,9 @@ public class EnrichedContentUpdateService {
     public EnrichedContentUpdateResponse applyManualUpdate(UUID elementId, EnrichedContentUpdateRequest request) {
         EnrichedContentElement element = loadElement(elementId);
         UpdatedFields updatedFields = resolveManualUpdate(element, request);
+        if (updatedFields.updatedFields == null || updatedFields.updatedFields.isEmpty()) {
+            return buildResponse(element, findLatestRevision(element.getId()));
+        }
         applyUpdates(element, updatedFields);
         element.setUserOverrideActive(true);
         element.setNewAiAvailable(false);
@@ -87,6 +90,7 @@ public class EnrichedContentUpdateService {
         if (fieldsToUpdate.isEmpty()) {
             fieldsToUpdate = SUPPORTED_FIELDS;
         }
+        boolean previewOnly = request != null && Boolean.TRUE.equals(request.getPreview());
 
         Map<String, Object> bedrockResponse = callBedrock(element);
         if (bedrockResponse.containsKey("error")) {
@@ -97,6 +101,29 @@ public class EnrichedContentUpdateService {
         Map<String, Object> standardEnrichments = (Map<String, Object>) bedrockResponse.getOrDefault("standardEnrichments", bedrockResponse);
         UpdatedFields updatedFields = resolveGeneratedUpdate(element, standardEnrichments, fieldsToUpdate);
         updatedFields.modelUsed = bedrockEnrichmentService.getConfiguredModelId();
+        boolean hasUpdates = updatedFields.updatedFields != null && !updatedFields.updatedFields.isEmpty();
+
+        if (previewOnly) {
+            Map<String, Object> previewPayload = new HashMap<>();
+            previewPayload.put("summary", updatedFields.summary);
+            previewPayload.put("classification", updatedFields.classification);
+            previewPayload.put("keywords", updatedFields.keywords);
+            previewPayload.put("tags", updatedFields.tags);
+            previewPayload.put("modelUsed", updatedFields.modelUsed);
+            previewPayload.put("updatedFields", updatedFields.updatedFields);
+
+            EnrichedContentUpdateResponse response = new EnrichedContentUpdateResponse(element, null);
+            response.setPreview(previewPayload);
+            return response;
+        }
+
+        if (!hasUpdates) {
+            element.setBedrockModelUsed(updatedFields.modelUsed);
+            element.setUserOverrideActive(false);
+            element.setNewAiAvailable(false);
+            elementRepository.save(element);
+            return buildResponse(element, findLatestRevision(element.getId()));
+        }
 
         applyUpdates(element, updatedFields);
         element.setBedrockModelUsed(updatedFields.modelUsed);
@@ -249,6 +276,9 @@ public class EnrichedContentUpdateService {
     }
 
     private EnrichedContentUpdateResponse buildResponse(EnrichedContentElement element, EnrichedContentRevision revision) {
+        if (revision == null) {
+            return new EnrichedContentUpdateResponse(element, null);
+        }
         EnrichedContentUpdateResponse.RevisionSnapshot snapshot = new EnrichedContentUpdateResponse.RevisionSnapshot(
                 revision.getId(),
                 revision.getRevision(),
@@ -257,6 +287,14 @@ public class EnrichedContentUpdateService {
                 revision.getCreatedAt()
         );
         return new EnrichedContentUpdateResponse(element, snapshot);
+    }
+
+    private EnrichedContentRevision findLatestRevision(UUID elementId) {
+        if (elementId == null) {
+            return null;
+        }
+        return revisionRepository.findFirstByEnrichedContentElementIdOrderByRevisionDesc(elementId)
+                .orElse(null);
     }
 
     private Map<String, Object> buildMetadata(EnrichedContentUpdateRequest request, UpdatedFields fields) {
