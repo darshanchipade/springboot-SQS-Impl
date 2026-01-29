@@ -22,6 +22,7 @@ import java.util.Optional;
 public class QueryInterpretationService {
 
     private static final Logger log = LoggerFactory.getLogger(QueryInterpretationService.class);
+    private static final int LOG_VALUE_LIMIT = 500;
 
     private final BedrockEnrichmentService bedrockEnrichmentService;
     private final ObjectMapper objectMapper;
@@ -44,7 +45,23 @@ public class QueryInterpretationService {
             String rawResponse = bedrockEnrichmentService.invokeChatForText(prompt, 400);
             String jsonPayload = stripJsonFences(rawResponse);
             JsonNode root = objectMapper.readTree(jsonPayload);
-            return Optional.of(parseInterpretation(root, userMessage));
+            QueryInterpretation interpretation = parseInterpretation(root, userMessage);
+            log.info("Query interpretation input message='{}'", clip(userMessage));
+            log.info("Query interpretation raw response='{}'", clip(rawResponse));
+            log.info("Query interpretation parsed payload='{}'", clip(jsonPayload));
+            log.info(
+                    "Query interpretation fields rawQuery='{}', sectionKey='{}', role='{}', pageId='{}', locale='{}', language='{}', country='{}', tags={}, keywords={}",
+                    clip(interpretation.rawQuery()),
+                    interpretation.sectionKey(),
+                    interpretation.role(),
+                    interpretation.pageId(),
+                    interpretation.locale(),
+                    interpretation.language(),
+                    interpretation.country(),
+                    interpretation.tags(),
+                    interpretation.keywords()
+            );
+            return Optional.of(interpretation);
         } catch (ThrottledException te) {
             throw te;
         } catch (Exception ex) {
@@ -156,5 +173,16 @@ public class QueryInterpretationService {
 
     private String escapeBraces(String input) {
         return input == null ? "" : input.replace("{", "{{").replace("}", "}}");
+    }
+
+    private String clip(String value) {
+        if (!StringUtils.hasText(value)) {
+            return value;
+        }
+        String normalized = value.replaceAll("\\s+", " ").trim();
+        if (normalized.length() <= LOG_VALUE_LIMIT) {
+            return normalized;
+        }
+        return normalized.substring(0, LOG_VALUE_LIMIT) + "...";
     }
 }

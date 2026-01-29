@@ -6,6 +6,8 @@ import com.apple.springboot.model.ContentChunkWithDistance;
 import com.apple.springboot.model.ConsolidatedEnrichedSection;
 import com.apple.springboot.model.QueryInterpretation;
 import com.apple.springboot.repository.ConsolidatedEnrichedSectionRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -31,6 +33,8 @@ import java.util.stream.Collectors;
 
 @Service
 public class ChatbotService {
+    private static final Logger log = LoggerFactory.getLogger(ChatbotService.class);
+    private static final int LOG_VALUE_LIMIT = 500;
     private final VectorSearchService vectorSearchService;
     private final ConsolidatedEnrichedSectionRepository consolidatedRepo;
     private final QueryInterpretationService queryInterpretationService;
@@ -96,12 +100,46 @@ public class ChatbotService {
         String userMessage = request != null ? request.getMessage() : null;
         Map<String, Object> rawRequestContext = request != null ? request.getContext() : null;
         Map<String, Object> requestContext = sanitizeContext(rawRequestContext);
+        log.info(
+                "Chatbot query input message='{}', sectionKey='{}', role='{}', tags={}, keywords={}, contextKeys={}",
+                clip(userMessage),
+                request != null ? request.getSectionKey() : null,
+                request != null ? request.getOriginal_field_name() : null,
+                request != null ? request.getTags() : null,
+                request != null ? request.getKeywords() : null,
+                contextKeys(requestContext)
+        );
 
         QueryInterpretation interpretation = queryInterpretationService
                 .interpret(userMessage, requestContext)
                 .orElse(null);
+        if (interpretation != null) {
+            log.info(
+                    "Chatbot interpretation rawQuery='{}', sectionKey='{}', role='{}', pageId='{}', locale='{}', language='{}', country='{}', tags={}, keywords={}, contextKeys={}",
+                    clip(interpretation.rawQuery()),
+                    interpretation.sectionKey(),
+                    interpretation.role(),
+                    interpretation.pageId(),
+                    interpretation.locale(),
+                    interpretation.language(),
+                    interpretation.country(),
+                    interpretation.tags(),
+                    interpretation.keywords(),
+                    contextKeys(interpretation.context())
+            );
+        }
 
         SearchCriteria criteria = buildCriteria(request, interpretation);
+        log.info(
+                "Chatbot search criteria sectionKey='{}', role='{}', pageId='{}', locale='{}', language='{}', country='{}', message='{}'",
+                criteria.sectionKey(),
+                criteria.role(),
+                criteria.pageId(),
+                criteria.locale(),
+                criteria.language(),
+                criteria.country(),
+                clip(criteria.message())
+        );
         if (!StringUtils.hasText(criteria.sectionKey())) {
             return List.of();
         }
@@ -118,6 +156,7 @@ public class ChatbotService {
         }
         List<String> tagFilters = new ArrayList<>(tagSet);
         List<String> keywordFilters = new ArrayList<>(keywordSet);
+        log.info("Chatbot search filters tags={}, keywords={}", tagFilters, keywordFilters);
 
         Map<String, Object> interpretationContext = sanitizeContext(interpretation != null ? interpretation.context() : null);
         if (interpretation != null) {
@@ -428,6 +467,24 @@ public class ChatbotService {
         }
         String normalized = text.replaceAll("\\s+", " ").trim();
         return Integer.toHexString(normalized.hashCode());
+    }
+
+    private String clip(String value) {
+        if (!StringUtils.hasText(value)) {
+            return value;
+        }
+        String normalized = value.replaceAll("\\s+", " ").trim();
+        if (normalized.length() <= LOG_VALUE_LIMIT) {
+            return normalized;
+        }
+        return normalized.substring(0, LOG_VALUE_LIMIT) + "...";
+    }
+
+    private List<String> contextKeys(Map<String, Object> context) {
+        if (context == null || context.isEmpty()) {
+            return List.of();
+        }
+        return new ArrayList<>(context.keySet());
     }
 
     /**
