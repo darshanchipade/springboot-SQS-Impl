@@ -38,6 +38,9 @@ public class EmbeddingBackfillWorker {
     private final boolean workerEnabled;
     private final AtomicBoolean running = new AtomicBoolean(false);
 
+    /**
+     * Builds the background worker that backfills missing embeddings.
+     */
     public EmbeddingBackfillWorker(ConsolidatedEnrichedSectionRepository sectionRepository,
                                    ContentChunkRepository contentChunkRepository,
                                    TextChunkingService textChunkingService,
@@ -60,6 +63,9 @@ public class EmbeddingBackfillWorker {
         this.workerEnabled = workerEnabled;
     }
 
+    /**
+     * Scheduled entry point that processes sections missing embeddings.
+     */
     @Scheduled(fixedDelayString = "${app.embedding.worker.poll-delay-ms:5000}")
     @Transactional
     public void pollPendingSections() {
@@ -77,6 +83,9 @@ public class EmbeddingBackfillWorker {
         }
     }
 
+    /**
+     * Loads a batch of pending sections and drives embedding creation.
+     */
     private void processBatch() {
         List<ConsolidatedEnrichedSection> sections = sectionRepository.lockSectionsMissingEmbeddings(batchSize);
         if (sections.isEmpty()) {
@@ -104,6 +113,9 @@ public class EmbeddingBackfillWorker {
         }
     }
 
+    /**
+     * Generates embeddings for a section and persists content chunks.
+     */
     private boolean embedSection(ConsolidatedEnrichedSection section) {
         List<String> chunks = textChunkingService.chunkIfNeeded(section.getCleansedText());
         if (chunks.isEmpty()) {
@@ -139,6 +151,9 @@ public class EmbeddingBackfillWorker {
         }
     }
 
+    /**
+     * Acquires permits on the provided rate limiters before API calls.
+     */
     private void throttleFor(RateLimiter... limiters) {
         if (limiters == null) {
             return;

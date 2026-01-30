@@ -49,43 +49,91 @@ public class RawDataStore {
     @Column(name = "latest")
     private Boolean latest = true;
 
+    /**
+     * Default constructor for JPA.
+     */
     public RawDataStore() {}
 
+    /**
+     * Sets the primary key ID.
+     */
     public void setId(UUID id) { this.id = id; }
 
+    /**
+     * Sets the source URI associated with this payload.
+     */
     public void setSourceUri(String sourceUri) { this.sourceUri = sourceUri; }
 
+    /**
+     * Sets the raw text payload.
+     */
     public void setRawContentText(String rawContentText) { this.rawContentText = rawContentText; }
 
+    /**
+     * Sets the raw binary payload.
+     */
     public void setRawContentBinary(byte[] rawContentBinary) { this.rawContentBinary = rawContentBinary; }
 
+    /**
+     * Sets the extracted source metadata JSON.
+     */
     public void setSourceMetadata(String sourceMetadata) { this.sourceMetadata = sourceMetadata; }
 
+    /**
+     * Sets the timestamp when the payload was received.
+     */
     public void setReceivedAt(OffsetDateTime receivedAt) { this.receivedAt = receivedAt; }
 
+    /**
+     * Sets the ingestion status for this payload.
+     */
     public void setStatus(String status) { this.status = status; }
 
+    /**
+     * Returns the payload content hash.
+     */
     public String getContentHash() { return contentHash; }
 
+    /**
+     * Sets the payload content hash.
+     */
     public void setContentHash(String contentHash) { this.contentHash = contentHash; }
 
+    /**
+     * Returns the content type of the stored payload.
+     */
     public String getSourceContentType() { return sourceContentType; }
 
+    /**
+     * Sets the content type of the stored payload.
+     */
     public void setSourceContentType(String sourceContentType) { this.sourceContentType = sourceContentType; }
 
 
+    /**
+     * Returns the version number for this source URI.
+     */
     public Integer getVersion() {
         return version;
     }
 
+    /**
+     * Updates the version number for this source URI.
+     */
     public void setVersion(Integer version) {
         this.version = version;
     }
 
+    /**
+     * Returns whether this is the latest version.
+     */
     public Boolean isLatest() {
         return latest;
     }
 
+    /**
+     * Marks whether this record is the latest version.
+     */
     public void setLatest(Boolean latest) {
         this.latest = latest;
     }

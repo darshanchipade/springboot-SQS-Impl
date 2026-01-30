@@ -10,12 +10,30 @@ import java.util.UUID;
 
 @Repository
 public interface EnrichedContentElementRepository extends JpaRepository<EnrichedContentElement, UUID> {
+    /**
+     * Counts elements for a cleansed data record.
+     */
     long countByCleansedDataId(UUID cleansedDataId);
+    /**
+     * Loads all elements for a cleansed data record.
+     */
     List<EnrichedContentElement> findAllByCleansedDataId(UUID cleansedDataId);
+    /**
+     * Checks for an element by logical key and cleansed text.
+     */
     boolean existsByItemSourcePathAndItemOriginalFieldNameAndCleansedText(String sourcePath, String fieldName, String cleansedText);
+    /**
+     * Checks for an element by logical key and content hash.
+     */
     boolean existsByItemSourcePathAndItemOriginalFieldNameAndContentHash(String sourcePath, String fieldName, String contentHash);
 
+    /**
+     * Checks for an element by source URI, key, and content hash.
+     */
     boolean existsBySourceUriAndItemSourcePathAndItemOriginalFieldNameAndContentHash(String sourceUri, String sourcePath, String fieldName, String contentHash);
+    /**
+     * Checks for an element by source URI, key, and cleansed text.
+     */
     boolean existsBySourceUriAndItemSourcePathAndItemOriginalFieldNameAndCleansedText(String sourceUri, String sourcePath, String fieldName, String cleansedText);
 
     /**
@@ -23,8 +41,14 @@ public interface EnrichedContentElementRepository extends JpaRepository<Enriched
      * This is the correct method signature.
      */
     Optional<EnrichedContentElement> findByCleansedDataIdAndItemSourcePathAndItemOriginalFieldName(UUID cleansedDataId, String sourcePath, String fieldName);
+    /**
+     * Loads elements ordered by enrichment time.
+     */
     List<EnrichedContentElement> findByCleansedDataIdOrderByEnrichedAtAsc(UUID cleansedDataId);
 
+    /**
+     * Loads elements for a source URI and version.
+     */
     List<EnrichedContentElement> findAllBySourceUriAndVersion(String sourceUri, Integer version);
 
 }

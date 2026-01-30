@@ -32,12 +32,18 @@ public class SearchController {
     private final RefinementService refinementService;
     private final VectorSearchService vectorSearchService;
 
+    /**
+     * Wires refinement and vector search services for API endpoints.
+     */
     @Autowired
     public SearchController(RefinementService refinementService, VectorSearchService vectorSearchService) {
         this.refinementService = refinementService;
         this.vectorSearchService = vectorSearchService;
     }
 
+    /**
+     * Returns refinement chip suggestions for a given query string.
+     */
     @Operation(
             summary = "Get refinement chips for a query",
             description = "Retrieves refinement chips (suggestions) based on the provided query. " +
@@ -56,6 +62,9 @@ public class SearchController {
         return refinementService.getRefinementChips(query);
     }
 
+    /**
+     * Executes a vector search using the query and optional filters.
+     */
     @Operation(
             summary = "Vector search endpoint",
             description = "Performs a vector search based on the provided query and filters. " +
@@ -101,6 +110,9 @@ public class SearchController {
         }).collect(Collectors.toList());
     }
 
+    /**
+     * Trims and truncates values to keep log lines readable.
+     */
     private String clip(String value) {
         if (value == null || value.isBlank()) {
             return value;
@@ -112,6 +124,9 @@ public class SearchController {
         return normalized.substring(0, LOG_VALUE_LIMIT) + "...";
     }
 
+    /**
+     * Extracts top-level context keys for safe logging.
+     */
     private List<String> contextKeys(java.util.Map<String, Object> context) {
         if (context == null || context.isEmpty()) {
             return List.of();

@@ -40,6 +40,9 @@ public class BedrockEnrichmentService {
 
     @Value("${app.enrichment.computeItemVector:false}")
     private boolean computeItemVector;
+    /**
+     * Initializes the Bedrock client and model configuration.
+     */
     @Autowired
     public BedrockEnrichmentService(ObjectMapper objectMapper,
                                     @Value("${aws.region:us-east-1}") String region,
@@ -64,10 +67,16 @@ public class BedrockEnrichmentService {
         logger.info("BedrockEnrichmentService initialized with region: {} and model ID: {}", this.bedrockRegion, this.bedrockModelId);
     }
 
+    /**
+     * Returns the configured Bedrock model identifier.
+     */
     public String getConfiguredModelId() {
         return this.bedrockModelId;
     }
 
+    /**
+     * Generates an embedding vector using the configured embedding model.
+     */
     public float[] generateEmbedding(String text) throws IOException {
         ObjectNode payload = objectMapper.createObjectNode();
         payload.put("inputText", text);
@@ -100,6 +109,9 @@ public class BedrockEnrichmentService {
         }
     }
 
+    /**
+     * Builds the prompt template for Bedrock enrichment calls.
+     */
     private String createEnrichmentPrompt(JsonNode itemContent, EnrichmentContext context) throws JsonProcessingException {
         String cleansedContent = itemContent.path("cleansedContent").asText("");
         String contextJson = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(context);
@@ -133,6 +145,10 @@ public class BedrockEnrichmentService {
                         "}";
         return String.format(promptTemplate, cleansedContent, contextJson);
     }
+
+    /**
+     * Invokes Bedrock to enrich a single content item with summary, tags, and metadata.
+     */
     public Map<String, Object> enrichItem(JsonNode itemContent, EnrichmentContext context) {
         String effectiveModelId = this.bedrockModelId;
         String sourcePath = (context != null && context.getEnvelope() != null) ? context.getEnvelope().getSourcePath() : "Unknown";
@@ -219,6 +235,7 @@ public class BedrockEnrichmentService {
 
     /**
      * Generic chat invoke for free-form prompts. Returns the first text block from the response.
+     * Allows an optional max token override to fit prompt sizes.
      */
     public String invokeChatForText(String content, Integer overrideMaxTokens) {
         String effectiveModelId = this.bedrockModelId;
@@ -277,7 +294,9 @@ public class BedrockEnrichmentService {
         }
     }
 
-
+    /**
+     * Executes the Bedrock invocation with exponential backoff for throttling.
+     */
     private InvokeModelResponse invokeWithRetry(InvokeModelRequest request, boolean isEmbedding) {
         final int maxAttempts = 6;
         final long baseBackoffMs = isEmbedding ? 400L : 800L;

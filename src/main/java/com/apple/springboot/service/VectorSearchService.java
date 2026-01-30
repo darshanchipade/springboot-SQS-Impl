@@ -17,6 +17,9 @@ public class VectorSearchService {
     @Autowired
     private BedrockEnrichmentService bedrockEnrichmentService;
 
+    /**
+     * Runs a vector search using the supplied query and optional filters.
+     */
     @Transactional(readOnly = true)
     public List<ContentChunkWithDistance> search(
             String query,
@@ -34,6 +37,9 @@ public class VectorSearchService {
         String fieldName = (original_field_name != null && !original_field_name.isEmpty()) ? original_field_name.toLowerCase() : null;
         return contentChunkRepository.findSimilar(queryVector, fieldName, tagsArray, keywordsArray, contextMap, threshold, limit, sectionKeyFilter);
     }
+    /**
+     * Convenience overload that omits the section key filter.
+     */
     public List<ContentChunkWithDistance> search(
             String query,
             String original_field_name,

@@ -13,10 +13,19 @@ import java.util.UUID;
 
 @Repository
 public interface CleansedDataStoreRepository extends JpaRepository<CleansedDataStore, UUID> {
+    /**
+     * Finds a cleansed record by raw data ID.
+     */
     Optional<CleansedDataStore> findByRawDataId(UUID rawDataId);
+    /**
+     * Loads the most recent cleansed record for a raw data ID.
+     */
     Optional<CleansedDataStore>findTopByRawDataIdOrderByCleansedAtDesc (UUID rawDataId);
     // Optional<CleansedDataStore> findBySourceUriAndContentHash(String sourceUri, String contentHash);
 
+    /**
+     * Updates status when the current status matches the expected value.
+     */
     @Transactional
     @Modifying(clearAutomatically = true)
     @Query("update CleansedDataStore c set c.status = :newStatus where c.id = :id and c.status = :expectedStatus")

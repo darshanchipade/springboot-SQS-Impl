@@ -16,10 +16,16 @@ public class ChatbotController {
 
     private final ChatbotService chatbotService;
 
+    /**
+     * Creates a controller that delegates chatbot queries to the service layer.
+     */
     public ChatbotController(ChatbotService chatbotService) {
         this.chatbotService = chatbotService;
     }
 
+    /**
+     * Validates the incoming request and returns chatbot search results.
+     */
     @PostMapping("/query")
     public ResponseEntity<List<ChatbotResultDto>> chat(@RequestBody(required = false) ChatbotRequest request) {
         if (request == null || !StringUtils.hasText(request.getMessage())) {

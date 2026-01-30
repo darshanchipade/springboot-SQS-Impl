@@ -32,10 +32,16 @@ public class EnrichedContentController {
 
     private final EnrichedContentUpdateService updateService;
 
+    /**
+     * Creates a controller that delegates enrichment updates and revisions.
+     */
     public EnrichedContentController(EnrichedContentUpdateService updateService) {
         this.updateService = updateService;
     }
 
+    /**
+     * Accepts manual edits and persists a new enrichment revision.
+     */
     @Operation(
             summary = "Save manual edits for enriched content",
             description = "Updates summary, classification, keywords, and tags for a specific enriched content element."
@@ -62,6 +68,9 @@ public class EnrichedContentController {
         }
     }
 
+    /**
+     * Regenerates enrichment fields using Bedrock and returns the new payload.
+     */
     @Operation(
             summary = "Regenerate enriched content using Bedrock",
             description = "Rebuilds summary, classification, keywords, and/or tags for an enriched content element."
@@ -92,6 +101,9 @@ public class EnrichedContentController {
         }
     }
 
+    /**
+     * Lists all stored revisions for an enriched content element.
+     */
     @Operation(
             summary = "List revision history for enriched content",
             description = "Returns all revisions stored for a specific enriched content element."
@@ -116,6 +128,9 @@ public class EnrichedContentController {
         }
     }
 
+    /**
+     * Restores a previously saved enrichment revision to the consolidated row.
+     */
     @Operation(
             summary = "Restore a previous enrichment revision",
             description = "Restores summary, classification, keywords, and tags from a stored revision."

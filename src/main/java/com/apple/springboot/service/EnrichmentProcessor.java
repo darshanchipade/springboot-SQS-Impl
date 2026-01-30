@@ -38,6 +38,9 @@ public class EnrichmentProcessor {
     @Value("${app.enrichment.computeItemVector:false}")
     private boolean computeItemVector;
 
+    /**
+     * Creates a processor that enriches content items with Bedrock.
+     */
     @SuppressWarnings("UnstableApiUsage")
     public EnrichmentProcessor(BedrockEnrichmentService bedrockEnrichmentService,
                                CleansedDataStoreRepository cleansedDataStoreRepository,
@@ -63,6 +66,9 @@ public class EnrichmentProcessor {
         this.finalizationService = finalizationService;
     }
 
+    /**
+     * Processes an enrichment message from SQS and tracks completion.
+     */
     public void process(EnrichmentMessage message) {
         boolean shouldRecordCompletion = true;
         throttleFor(bedrockRateLimiter, chatRateLimiter);
@@ -126,6 +132,9 @@ public class EnrichmentProcessor {
         }
     }
 
+    /**
+     * Performs enrichment inline without SQS dispatch.
+     */
     public void processInline(CleansedItemDetail itemDetail, CleansedDataStore cleansedDataEntry) {
         throttleFor(bedrockRateLimiter, chatRateLimiter);
         try {
@@ -140,18 +149,30 @@ public class EnrichmentProcessor {
         }
     }
 
+    /**
+     * Finalizes enrichment when running inline processing.
+     */
     public void finalizeInline(CleansedDataStore cds) {
         runFinalizationService(cds, true);
     }
 
+    /**
+     * Finalizes enrichment after queued processing completes.
+     */
     public void runFinalizationSteps(CleansedDataStore cds) {
         runFinalizationService(cds, false);
     }
 
+    /**
+     * Delegates finalization to the finalization service.
+     */
     private void runFinalizationService(CleansedDataStore cds, boolean allowInline) {
         finalizationService.finalizeCleansedData(cds, allowInline);
     }
 
+    /**
+     * Acquires permits on the configured rate limiters.
+     */
     private void throttleFor(RateLimiter... limiters) {
         if (limiters == null) return;
         for (RateLimiter limiter : limiters) {
@@ -161,6 +182,9 @@ public class EnrichmentProcessor {
         }
     }
 
+    /**
+     * Calls Bedrock, validates output, and persists results or errors.
+     */
     private void performEnrichment(CleansedItemDetail itemDetail, CleansedDataStore cleansedDataEntry) throws Exception {
         try {
             Map<String, String> itemContent = new HashMap<>();
@@ -194,6 +218,9 @@ public class EnrichmentProcessor {
         }
     }
 
+    /**
+     * Checks if enrichment completion thresholds have been met.
+     */
     private void checkCompletion(CleansedDataStore cleansedDataEntry) {
         // Prefer persisted expected count (restart-safe, and correct for delta runs).
         long expected;
@@ -219,6 +246,9 @@ public class EnrichmentProcessor {
         }
     }
 
+    /**
+     * Returns true when the cleansed record is in a final enriched status.
+     */
     private boolean isFinalStatus(CleansedDataStore cleansedDataEntry) {
         String status = cleansedDataEntry.getStatus();
         return status != null && (status.contains("ENRICHED_COMPLETE") || status.contains("PARTIALLY_ENRICHED"));

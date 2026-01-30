@@ -49,6 +49,9 @@ public class EnrichedContentUpdateService {
     private final AIResponseValidator aiResponseValidator;
     private final ObjectMapper objectMapper;
 
+    /**
+     * Creates the service that handles manual edits and Bedrock regeneration.
+     */
     public EnrichedContentUpdateService(EnrichedContentElementRepository elementRepository,
                                         EnrichedContentRevisionRepository revisionRepository,
                                         ConsolidatedEnrichedSectionRepository consolidatedRepository,
@@ -65,6 +68,9 @@ public class EnrichedContentUpdateService {
         this.objectMapper = objectMapper;
     }
 
+    /**
+     * Applies manual edits, persists the element, and records a USER revision.
+     */
     @Transactional
     public EnrichedContentUpdateResponse applyManualUpdate(UUID elementId, EnrichedContentUpdateRequest request) {
         EnrichedContentElement element = loadElement(elementId);
@@ -83,6 +89,9 @@ public class EnrichedContentUpdateService {
         return buildResponse(element, revision);
     }
 
+    /**
+     * Regenerates enrichment fields using Bedrock, honoring preview-only mode.
+     */
     @Transactional
     public EnrichedContentUpdateResponse regenerateFromBedrock(UUID elementId, EnrichedContentGenerateRequest request) {
         EnrichedContentElement element = loadElement(elementId);
@@ -141,12 +150,18 @@ public class EnrichedContentUpdateService {
         return buildResponse(element, revision);
     }
 
+    /**
+     * Returns the revision history for an enriched content element.
+     */
     @Transactional(readOnly = true)
     public List<EnrichedContentRevision> listRevisions(UUID elementId) {
         EnrichedContentElement element = loadElement(elementId);
         return revisionRepository.findAllByEnrichedContentElementIdOrderByRevisionDesc(element.getId());
     }
 
+    /**
+     * Restores a previous revision and records the restoration as USER.
+     */
     @Transactional
     public EnrichedContentUpdateResponse restoreFromRevision(UUID elementId, UUID revisionId) {
         EnrichedContentElement element = loadElement(elementId);
@@ -184,6 +199,9 @@ public class EnrichedContentUpdateService {
         return buildResponse(element, newRevision);
     }
 
+    /**
+     * Loads an enriched content element or throws if missing.
+     */
     private EnrichedContentElement loadElement(UUID elementId) {
         Optional<EnrichedContentElement> elementOpt = elementRepository.findById(elementId);
         if (elementOpt.isEmpty()) {
@@ -192,6 +210,9 @@ public class EnrichedContentUpdateService {
         return elementOpt.get();
     }
 
+    /**
+     * Resolves field updates from a manual edit request.
+     */
     private UpdatedFields resolveManualUpdate(EnrichedContentElement element, EnrichedContentUpdateRequest request) {
         UpdatedFields fields = new UpdatedFields();
         fields.summary = resolveText(request != null ? request.getSummary() : null, element.getSummary());
@@ -202,6 +223,9 @@ public class EnrichedContentUpdateService {
         return fields;
     }
 
+    /**
+     * Resolves field updates from a generated Bedrock response.
+     */
     private UpdatedFields resolveGeneratedUpdate(EnrichedContentElement element,
                                                 Map<String, Object> standardEnrichments,
                                                 Set<String> fieldsToUpdate) {
@@ -226,6 +250,9 @@ public class EnrichedContentUpdateService {
         return fields;
     }
 
+    /**
+     * Applies resolved field values onto the enriched content element.
+     */
     private void applyUpdates(EnrichedContentElement element, UpdatedFields fields) {
         element.setSummary(fields.summary);
         element.setClassification(fields.classification);
@@ -233,6 +260,9 @@ public class EnrichedContentUpdateService {
         element.setTags(fields.tags);
     }
 
+    /**
+     * Persists a revision for the supplied updated fields.
+     */
     private EnrichedContentRevision recordRevision(EnrichedContentElement element,
                                                    UpdatedFields updatedFields,
                                                    String source,
@@ -258,6 +288,9 @@ public class EnrichedContentUpdateService {
         return revision;
     }
 
+    /**
+     * Normalizes a revision source value to AI, USER, or REGENERATE.
+     */
     private String normalizeSource(String source) {
         if (source == null || source.isBlank()) {
             return SOURCE_USER;
@@ -275,6 +308,9 @@ public class EnrichedContentUpdateService {
         return SOURCE_USER;
     }
 
+    /**
+     * Builds the response payload for update or regeneration requests.
+     */
     private EnrichedContentUpdateResponse buildResponse(EnrichedContentElement element, EnrichedContentRevision revision) {
         if (revision == null) {
             return new EnrichedContentUpdateResponse(element, null);
@@ -289,6 +325,9 @@ public class EnrichedContentUpdateService {
         return new EnrichedContentUpdateResponse(element, snapshot);
     }
 
+    /**
+     * Finds the latest revision for an element if available.
+     */
     private EnrichedContentRevision findLatestRevision(UUID elementId) {
         if (elementId == null) {
             return null;
@@ -297,6 +336,9 @@ public class EnrichedContentUpdateService {
                 .orElse(null);
     }
 
+    /**
+     * Builds metadata for manual updates.
+     */
     private Map<String, Object> buildMetadata(EnrichedContentUpdateRequest request, UpdatedFields fields) {
         Map<String, Object> metadata = new HashMap<>();
         metadata.put("updatedFields", fields.updatedFields);
@@ -311,6 +353,9 @@ public class EnrichedContentUpdateService {
         return metadata;
     }
 
+    /**
+     * Returns the incoming list or falls back to the existing value.
+     */
     private List<String> resolveList(List<String> incoming, List<String> fallback) {
         if (incoming == null) {
             return fallback;
@@ -318,6 +363,9 @@ public class EnrichedContentUpdateService {
         return sanitizeList(incoming);
     }
 
+    /**
+     * Returns the incoming text or falls back to the existing value.
+     */
     private String resolveText(String incoming, String fallback) {
         if (incoming == null) {
             return fallback;
@@ -326,6 +374,9 @@ public class EnrichedContentUpdateService {
         return normalized;
     }
 
+    /**
+     * Resolves generated text when present, otherwise keeps the fallback.
+     */
     private String resolveGeneratedText(String fallback, Object generatedValue) {
         if (generatedValue == null) {
             return fallback;
@@ -334,6 +385,9 @@ public class EnrichedContentUpdateService {
         return resolved != null ? resolved : fallback;
     }
 
+    /**
+     * Resolves generated list values when present, otherwise keeps the fallback.
+     */
     private List<String> resolveGeneratedList(List<String> fallback, Object generatedValue) {
         if (generatedValue == null) {
             return fallback;
@@ -342,6 +396,9 @@ public class EnrichedContentUpdateService {
         return resolved != null ? resolved : fallback;
     }
 
+    /**
+     * Trims text and converts empty strings to null.
+     */
     private String normalizeText(String value) {
         if (value == null) {
             return null;
@@ -350,6 +407,9 @@ public class EnrichedContentUpdateService {
         return trimmed.isEmpty() ? null : trimmed;
     }
 
+    /**
+     * Converts an arbitrary object into a string representation.
+     */
     private String extractString(Object value) {
         if (value instanceof String s) {
             return s;
@@ -371,6 +431,9 @@ public class EnrichedContentUpdateService {
         return null;
     }
 
+    /**
+     * Normalizes list values from arrays, JSON strings, or delimited text.
+     */
     private List<String> normalizeListFromObject(Object value) {
         if (value instanceof List<?> list) {
             List<String> tokens = list.stream()
@@ -406,6 +469,9 @@ public class EnrichedContentUpdateService {
         return List.of();
     }
 
+    /**
+     * Trims, deduplicates, and removes empty values from a list.
+     */
     private List<String> sanitizeList(List<String> values) {
         if (values == null) {
             return null;
@@ -421,6 +487,9 @@ public class EnrichedContentUpdateService {
         return new ArrayList<>(deduped);
     }
 
+    /**
+     * Normalizes requested field names and filters to supported fields.
+     */
     private Set<String> normalizeFieldList(List<String> fields) {
         if (fields == null || fields.isEmpty()) {
             return Set.of();
@@ -433,6 +502,9 @@ public class EnrichedContentUpdateService {
                 .collect(Collectors.toCollection(LinkedHashSet::new));
     }
 
+    /**
+     * Determines which fields have changed from the existing element.
+     */
     private List<String> determineUpdatedFields(EnrichedContentElement element, UpdatedFields fields) {
         List<String> updated = new ArrayList<>();
         if (!Objects.equals(element.getSummary(), fields.summary)) updated.add("summary");
@@ -442,10 +514,16 @@ public class EnrichedContentUpdateService {
         return updated;
     }
 
+    /**
+     * Returns a non-null list for safe comparisons.
+     */
     private List<String> safeList(List<String> values) {
         return values == null ? List.of() : values;
     }
 
+    /**
+     * Calls Bedrock to enrich the element and validates the response.
+     */
     private Map<String, Object> callBedrock(EnrichedContentElement element) {
         Map<String, String> itemContent = new HashMap<>();
         itemContent.put("cleansedContent", element.getCleansedText());
@@ -479,6 +557,9 @@ public class EnrichedContentUpdateService {
         return result;
     }
 
+    /**
+     * Synchronizes consolidated section rows after updates are applied.
+     */
     private void syncConsolidatedSections(EnrichedContentElement element, UpdatedFields updatedFields) {
         if (element.getCleansedDataId() == null || element.getVersion() == null) {
             return;
@@ -541,6 +622,9 @@ public class EnrichedContentUpdateService {
         }
     }
 
+    /**
+     * Reads usagePath from context, falling back to itemSourcePath.
+     */
     private String extractUsagePath(EnrichedContentElement element) {
         Map<String, Object> ctx = element.getContext();
         if (ctx != null) {
@@ -555,6 +639,9 @@ public class EnrichedContentUpdateService {
         return element.getItemSourcePath();
     }
 
+    /**
+     * Splits a usagePath into section path and URI segments.
+     */
     private String[] splitUsagePath(String usagePath) {
         if (usagePath == null || usagePath.isBlank()) return new String[]{null, null};
         int idx = usagePath.indexOf(USAGE_REF_DELIM);

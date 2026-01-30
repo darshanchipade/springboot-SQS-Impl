@@ -67,6 +67,9 @@ public class CleansedDataStore {
 //    @Column(name = "content_hash")
 //    private String contentHash;
 
+    /**
+     * Default constructor for JPA.
+     */
     public CleansedDataStore() {}
 
 }

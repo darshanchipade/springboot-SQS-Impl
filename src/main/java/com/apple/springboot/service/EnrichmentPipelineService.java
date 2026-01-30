@@ -37,6 +37,9 @@ public class EnrichmentPipelineService {
     private final ContentHashingService contentHashingService;
     private final boolean useSqs;
 
+    /**
+     * Creates the pipeline service coordinating enrichment execution.
+     */
     public EnrichmentPipelineService(CleansedDataStoreRepository cleansedDataStoreRepository,
                                      EnrichedContentElementRepository enrichedContentElementRepository,
                                      ObjectMapper objectMapper,
@@ -59,6 +62,9 @@ public class EnrichmentPipelineService {
         this.useSqs = useSqs;
     }
 
+    /**
+     * Runs enrichment for a cleansed record and persists results.
+     */
     @Transactional
     public void enrichAndStore(CleansedDataStore cleansedDataEntry) throws JsonProcessingException {
         if (cleansedDataEntry == null || cleansedDataEntry.getId() == null) {
@@ -291,6 +297,9 @@ public class EnrichmentPipelineService {
         logger.info("{} items were dispatched for enrichment for CleansedDataStore ID: {}", itemsToQueue.size(), cleansedDataEntry.getId());
     }
 
+    /**
+     * Schedules finalization to run after the current transaction commits.
+     */
     private void scheduleInlineFinalization(CleansedDataStore cleansedDataEntry) {
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
             runInlineFinalizationImmediately(cleansedDataEntry);
@@ -304,6 +313,9 @@ public class EnrichmentPipelineService {
         });
     }
 
+    /**
+     * Runs inline finalization in a background task.
+     */
     private void runInlineFinalizationImmediately(CleansedDataStore cleansedDataEntry) {
         if (cleansedDataEntry == null || cleansedDataEntry.getId() == null) {
             return;
@@ -324,6 +336,9 @@ public class EnrichmentPipelineService {
         });
     }
 
+    /**
+     * Persists a skipped item and updates completion tracking.
+     */
     private void handleSkippedItem(CleansedItemDetail itemDetail, CleansedDataStore cleansedDataEntry, boolean trackCompletion) {
         try {
             persistenceService.saveSkippedEnrichedElement(itemDetail, cleansedDataEntry, "ENRICHMENT_SKIPPED");
@@ -348,6 +363,9 @@ public class EnrichmentPipelineService {
         }
     }
 
+    /**
+     * Converts raw maps into typed item details for enrichment.
+     */
     private List<CleansedItemDetail> convertMapsToCleansedItemDetails(List<Map<String, Object>> maps) {
         return maps.stream()
                 .map(map -> {
@@ -368,6 +386,9 @@ public class EnrichmentPipelineService {
                 .collect(Collectors.toList());
     }
 
+    /**
+     * Coerces a skipEnrichment flag to a boolean.
+     */
     private boolean extractSkipFlag(Object flag) {
         if (flag instanceof Boolean b) {
             return b;

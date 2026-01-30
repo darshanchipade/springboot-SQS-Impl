@@ -20,14 +20,23 @@ public record QueryInterpretation(
         List<String> keywords,
         Map<String, Object> context
 ) {
+    /**
+     * Returns tags as an immutable list.
+     */
     public List<String> tags() {
         return tags == null ? List.of() : Collections.unmodifiableList(tags);
     }
 
+    /**
+     * Returns keywords as an immutable list.
+     */
     public List<String> keywords() {
         return keywords == null ? List.of() : Collections.unmodifiableList(keywords);
     }
 
+    /**
+     * Returns context as an immutable map.
+     */
     public Map<String, Object> context() {
         return context == null ? Map.of() : Collections.unmodifiableMap(context);
     }

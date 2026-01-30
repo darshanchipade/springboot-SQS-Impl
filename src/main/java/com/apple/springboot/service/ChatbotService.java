@@ -469,6 +469,9 @@ public class ChatbotService {
         return Integer.toHexString(normalized.hashCode());
     }
 
+    /**
+     * Normalizes and truncates strings for log-safe output.
+     */
     private String clip(String value) {
         if (!StringUtils.hasText(value)) {
             return value;
@@ -480,6 +483,9 @@ public class ChatbotService {
         return normalized.substring(0, LOG_VALUE_LIMIT) + "...";
     }
 
+    /**
+     * Extracts top-level keys from a context map for logging.
+     */
     private List<String> contextKeys(Map<String, Object> context) {
         if (context == null || context.isEmpty()) {
             return List.of();

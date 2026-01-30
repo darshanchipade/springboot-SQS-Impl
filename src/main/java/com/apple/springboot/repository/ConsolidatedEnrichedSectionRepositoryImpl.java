@@ -14,6 +14,9 @@ public class ConsolidatedEnrichedSectionRepositoryImpl implements ConsolidatedEn
     @PersistenceContext
     private EntityManager entityManager;
 
+    /**
+     * Performs full-text search across summary, tags, and keywords.
+     */
     @Override
     public List<ConsolidatedEnrichedSection> findByFullTextSearch(String textQuery) {
         // Deprecated in practice by findByMetadataQuery; kept for compatibility (no cleansed_text)
@@ -30,6 +33,9 @@ public class ConsolidatedEnrichedSectionRepositoryImpl implements ConsolidatedEn
         return query.getResultList();
     }
 
+    /**
+     * Finds sections whose metadata matches the provided section key.
+     */
     @Override
     public List<ConsolidatedEnrichedSection> findBySectionKey(String sectionKey, int limit) {
         String sql = "SELECT * FROM consolidated_enriched_sections " +
@@ -46,6 +52,9 @@ public class ConsolidatedEnrichedSectionRepositoryImpl implements ConsolidatedEn
         return q.getResultList();
     }
 
+    /**
+     * Performs full-text search across metadata fields only.
+     */
     @Override
     public List<ConsolidatedEnrichedSection> findByMetadataQuery(String textQuery, int limit) {
         // Excludes cleansed_text; searches metadata and context usagePath
@@ -66,6 +75,9 @@ public class ConsolidatedEnrichedSectionRepositoryImpl implements ConsolidatedEn
         query.setMaxResults(Math.max(1, limit));
         return query.getResultList();
     }
+    /**
+     * Finds sections by a sectionKey stored in context facets.
+     */
     @Override
     public List<ConsolidatedEnrichedSection> findByContextSectionKey(String sectionKey, int limit) {
         String sql = "SELECT * FROM consolidated_enriched_sections " +
@@ -77,6 +89,9 @@ public class ConsolidatedEnrichedSectionRepositoryImpl implements ConsolidatedEn
         return q.getResultList();
     }
 
+    /**
+     * Finds sections matching the supplied page identifier.
+     */
     @Override
     public List<ConsolidatedEnrichedSection> findByPageId(String pageId, int limit) {
         String sql = "SELECT * FROM consolidated_enriched_sections " +

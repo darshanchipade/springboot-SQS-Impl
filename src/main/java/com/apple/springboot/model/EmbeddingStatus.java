@@ -5,6 +5,9 @@ package com.apple.springboot.model;
  */
 public final class EmbeddingStatus {
 
+    /**
+     * Prevents instantiation of the constants holder.
+     */
     private EmbeddingStatus() {
     }
 

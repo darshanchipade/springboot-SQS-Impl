@@ -136,11 +136,18 @@ public class DataIngestionService {
     private static class S3ObjectDetails {
         final String bucketName;
         final String fileKey;
+        /**
+         * Holds parsed bucket and key values for an S3 URI.
+         */
         S3ObjectDetails(String bucketName, String fileKey) {
             this.bucketName = bucketName;
             this.fileKey = fileKey;
         }
     }
+
+    /**
+     * Parses an S3 URI into bucket and key components.
+     */
     private S3ObjectDetails parseS3Uri(String s3Uri) throws IllegalArgumentException {
         if (s3Uri == null || !s3Uri.startsWith("s3://")) {
             throw new IllegalArgumentException("Invalid S3 URI format: Must start with s3://. Received: " + s3Uri);
@@ -337,6 +344,9 @@ public class DataIngestionService {
 
         return processLoadedContent(rawJsonContent, savedRawDataStore);
     }
+    /**
+     * Ingests a raw JSON payload and persists the cleansed result.
+     */
     @Transactional
     public CleansedDataStore ingestAndCleanseJsonPayload(String jsonPayload, String sourceIdentifier) throws JsonProcessingException {
         RawDataStore rawDataStore = findOrCreateRawDataStore(jsonPayload, sourceIdentifier);
@@ -386,6 +396,9 @@ public class DataIngestionService {
         return processLoadedContent(rawJsonContent, rawDataStore, existingCleansed);
     }
 
+    /**
+     * Refreshes an existing cleansed record with newly processed items.
+     */
     private CleansedDataStore refreshExistingCleansedRecord(
             CleansedDataStore existing,
             List<Map<String, Object>> items,
@@ -399,6 +412,9 @@ public class DataIngestionService {
         rawDataStoreRepository.save(rawData);
         return cleansedDataStoreRepository.save(existing);
     }
+    /**
+     * Finds an existing RawDataStore or creates a new one for the payload.
+     */
     private RawDataStore findOrCreateRawDataStore(String jsonPayload, String sourceIdentifier) {
         if (jsonPayload == null || jsonPayload.trim().isEmpty()) {
             throw new IllegalArgumentException("JSON payload cannot be null or empty for sourceIdentifier " + sourceIdentifier);
@@ -441,6 +457,9 @@ public class DataIngestionService {
         return rawDataStoreRepository.save(rawDataStore);
     }
 
+    /**
+     * Populates raw data storage fields from the payload.
+     */
     private void populatePayloadColumns(RawDataStore rawDataStore, String jsonPayload) {
         rawDataStore.setRawContentText(jsonPayload);
         rawDataStore.setRawContentBinary(jsonPayload.getBytes(StandardCharsets.UTF_8));
@@ -448,6 +467,9 @@ public class DataIngestionService {
         rawDataStore.setSourceMetadata(extractSourceMetadata(jsonPayload));
     }
 
+    /**
+     * Backfills missing raw payload columns on existing records.
+     */
     private void backfillPayloadColumnsIfMissing(RawDataStore rawDataStore, String jsonPayload) {
         if (rawDataStore.getRawContentText() == null) {
             rawDataStore.setRawContentText(jsonPayload);
@@ -463,6 +485,9 @@ public class DataIngestionService {
         }
     }
 
+    /**
+     * Chooses an initial status based on the payload source identifier.
+     */
     private String resolveUploadStatus(String sourceIdentifier) {
         if (sourceIdentifier == null) {
             return "API_PAYLOAD_RECEIVED";
@@ -476,6 +501,9 @@ public class DataIngestionService {
         return "API_PAYLOAD_RECEIVED";
     }
 
+    /**
+     * Strips content fields and returns remaining metadata as JSON.
+     */
     private String extractSourceMetadata(String jsonPayload) {
         if (jsonPayload == null) {
             return null;
@@ -495,11 +523,17 @@ public class DataIngestionService {
         }
     }
 
+    /**
+     * Processes raw content and returns a cleansed data record.
+     */
     private CleansedDataStore processLoadedContent(String rawJsonContent,
                                                    RawDataStore rawDataStore) throws JsonProcessingException {
         return processLoadedContent(rawJsonContent, rawDataStore, null);
     }
 
+    /**
+     * Processes raw content and optionally refreshes an existing cleansed record.
+     */
     private CleansedDataStore processLoadedContent(String rawJsonContent,
                                                    RawDataStore rawDataStore,
                                                    @Nullable CleansedDataStore existingCleansed) throws JsonProcessingException {
@@ -576,6 +610,9 @@ public class DataIngestionService {
         }
     }
 
+    /**
+     * Filters items down to those that changed versus stored content hashes.
+     */
     private List<Map<String, Object>> filterForChangedItems(List<Map<String, Object>> allItems) {
         if (allItems == null || allItems.isEmpty()) {
             return Collections.emptyList();
@@ -758,6 +795,9 @@ public class DataIngestionService {
         return changed;
     }
 
+    /**
+     * Extracts items from a raw JSON payload for delta comparison.
+     */
     private List<Map<String, Object>> extractItemsFromRaw(String rawJsonContent, String sourceUri) {
         try {
             JsonNode rootNode = objectMapper.readTree(rawJsonContent);
@@ -844,14 +884,23 @@ public class DataIngestionService {
         }
     }
 
+    /**
+     * Builds a stable key that includes usagePath for hash lookups.
+     */
     private String exactKey(String sourcePath, String itemType, String usagePath) {
         return sourcePath + "\u0001" + itemType + "\u0001" + (usagePath == null ? "" : usagePath);
     }
 
+    /**
+     * Builds a legacy key without usagePath for backward compatibility.
+     */
     private String legacyKey(String sourcePath, String itemType) {
         return sourcePath + "\u0001" + itemType;
     }
 
+    /**
+     * Creates and persists a new CleansedDataStore entry.
+     */
     private CleansedDataStore createCleansedDataStore(List<Map<String, Object>> items, RawDataStore rawData) {
         CleansedDataStore cleansedDataStore = new CleansedDataStore();
         cleansedDataStore.setRawDataId(rawData.getId());
@@ -865,6 +914,9 @@ public class DataIngestionService {
         return cleansedDataStoreRepository.save(cleansedDataStore);
     }
 
+    /**
+     * Traverses the JSON tree and extracts content items with context.
+     */
     private void findAndExtractRecursive(JsonNode currentNode, String parentFieldName, Envelope parentEnvelope, Facets parentFacets, List<Map<String, Object>> results, IngestionCounters counters) {
         if (currentNode.isObject()) {
             Envelope currentEnvelope = buildCurrentEnvelope(currentNode, parentEnvelope);
@@ -987,6 +1039,9 @@ public class DataIngestionService {
     }
 
 
+    /**
+     * Builds an envelope object by inheriting and overriding parent context.
+     */
     private Envelope buildCurrentEnvelope(JsonNode currentNode, Envelope parentEnvelope) {
         Envelope currentEnvelope = new Envelope();
         // Prefer JSON `_path` when it's a real CMS/content path, but do NOT let it override the
@@ -1037,6 +1092,9 @@ public class DataIngestionService {
         return currentEnvelope;
     }
 
+    /**
+     * Builds a facets map for the current node, inheriting parent values.
+     */
     private Facets buildCurrentFacets(JsonNode currentNode, Facets parentFacets) {
         Facets currentFacets = new Facets();
         currentFacets.putAll(parentFacets);
@@ -1057,6 +1115,9 @@ public class DataIngestionService {
         return currentFacets;
     }
 
+    /**
+     * Processes a content field into a cleansed item with context.
+     */
     private void processContentField(String content, String fieldKey, Envelope envelope, Facets facets, List<Map<String, Object>> results, IngestionCounters counters, boolean isAnalytics) {
         boolean skipEnrichment = isExcluded(fieldKey);
         String cleansedContent = cleanseCopyText(content);
@@ -1103,11 +1164,17 @@ public class DataIngestionService {
         }
     }
 
+    /**
+     * Determines whether an extracted item is an analytics value.
+     */
     private boolean isAnalyticsItem(Map<String, Object> item) {
         String type = (String) item.get("itemType");
         return type != null && type.toLowerCase().contains("analytics");
     }
 
+    /**
+     * Recursively extracts analytics fields from nested structures.
+     */
     private void processAnalyticsNode(JsonNode node, String fieldKey, Envelope env, Facets facets,
                                       List<Map<String, Object>> results, IngestionCounters counters) {
         if (node == null || node.isNull()) return;
@@ -1156,6 +1223,9 @@ public class DataIngestionService {
         }
     }
 
+    /**
+     * Computes a SHA-256 hash for content and optional context.
+     */
     private String calculateContentHash(String content, String context) {
         if (content == null) return null; // Allow hashing of empty strings to differentiate from null
         try {
@@ -1171,6 +1241,9 @@ public class DataIngestionService {
         }
     }
 
+    /**
+     * Converts a byte array into a hexadecimal string.
+     */
     private static String bytesToHex(byte[] hash) {
         StringBuilder hexString = new StringBuilder(2 * hash.length);
         for (byte b : hash) {
@@ -1181,6 +1254,9 @@ public class DataIngestionService {
         return hexString.toString();
     }
 
+    /**
+     * Creates and persists an error cleansed record with the supplied status.
+     */
     private CleansedDataStore createAndSaveErrorCleansedDataStore(RawDataStore rawDataStore, String cleansedStatus, String errorMessage, String specificErrorMessage) {
         CleansedDataStore errorCleansedData = new CleansedDataStore();
         if (rawDataStore != null) {
@@ -1194,6 +1270,9 @@ public class DataIngestionService {
         return cleansedDataStoreRepository.save(errorCleansedData);
     }
 
+    /**
+     * Removes placeholders and HTML tags from copy text.
+     */
     private static String cleanseCopyText(String text) {
         if (text == null) return null;
         String cleansed = text;
@@ -1217,12 +1296,18 @@ public class DataIngestionService {
         return cleansed;
     }
 
+    /**
+     * Returns true if the key represents an image-related node.
+     */
     private boolean isImageNodeKey(String key) {
         if (key == null) return false;
         String lower = key.toLowerCase();
         return lower.contains("image") || lower.contains("backgroundimage");
     }
 
+    /**
+     * Flattens icon metadata into the facets map.
+     */
     private void enrichFacetsWithIconProperties(JsonNode iconNode, String prefix, Facets targetFacets) {
         if (iconNode == null || iconNode.isNull()) return;
         iconNode.fields().forEachRemaining(entry -> {
@@ -1238,6 +1323,9 @@ public class DataIngestionService {
         });
     }
 
+    /**
+     * Flattens image metadata into the facets map.
+     */
     private void enrichFacetsWithImageProperties(JsonNode imageNode, String prefix, Facets targetFacets) {
         if (imageNode == null || imageNode.isNull()) return;
         imageNode.fields().forEachRemaining(entry -> {
@@ -1264,6 +1352,9 @@ public class DataIngestionService {
         });
     }
 
+    /**
+     * Parses excluded item type prefixes from configuration.
+     */
     private Set<String> parseExcludedItemTypes(String property) {
         if (property == null || property.isBlank()) {
             return Set.of();
@@ -1275,6 +1366,9 @@ public class DataIngestionService {
                 .collect(Collectors.toSet());
     }
 
+    /**
+     * Determines whether a field should be excluded from enrichment.
+     */
     private boolean isExcluded(String fieldKey) {
         if (fieldKey == null || excludedItemTypes.isEmpty()) {
             return false;

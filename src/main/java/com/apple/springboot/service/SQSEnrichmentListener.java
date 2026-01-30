@@ -38,6 +38,9 @@ public class SQSEnrichmentListener {
 
     private final java.util.concurrent.Semaphore inFlightLimiter;
 
+    /**
+     * Creates the SQS listener and configures concurrency limits.
+     */
     public SQSEnrichmentListener(SqsClient sqsClient,
                                  ObjectMapper objectMapper,
                                  EnrichmentProcessor enrichmentProcessor,
@@ -50,6 +53,9 @@ public class SQSEnrichmentListener {
         this.inFlightLimiter = new java.util.concurrent.Semaphore(Math.max(1, maxConcurrentMessages));
     }
 
+    /**
+     * Polls the SQS queue and dispatches messages for enrichment processing.
+     */
     @Scheduled(fixedDelay = 2000)
     public void pollQueue() {
         try {
@@ -87,6 +93,9 @@ public class SQSEnrichmentListener {
         }
     }
 
+    /**
+     * Determines whether the worker thread pool and queue are saturated.
+     */
     private boolean isWorkerSaturated() {
         if (taskExecutor instanceof ThreadPoolTaskExecutor ex) {
             int active = ex.getActiveCount();
@@ -99,6 +108,9 @@ public class SQSEnrichmentListener {
         return false;
     }
 
+    /**
+     * Ensures the in-flight semaphore is released after processing.
+     */
     private void processMessageWithRelease(Message message) {
         try {
             processMessage(message);
@@ -107,6 +119,9 @@ public class SQSEnrichmentListener {
         }
     }
 
+    /**
+     * Parses and processes a single SQS message.
+     */
     private void processMessage(Message message) {
         try {
             EnrichmentMessage enrichmentMessage = objectMapper.readValue(message.body(), EnrichmentMessage.class);
@@ -129,6 +144,9 @@ public class SQSEnrichmentListener {
         }
     }
 
+    /**
+     * Computes a visibility timeout extension based on receive count.
+     */
     private int computeVisibilityExtensionSeconds(Message message) {
         try {
             Map<String, String> attrs = message.attributesAsStrings();
@@ -142,6 +160,9 @@ public class SQSEnrichmentListener {
         }
     }
 
+    /**
+     * Deletes the message from the queue after successful processing.
+     */
     private void deleteMessage(Message message) {
         try {
             DeleteMessageRequest deleteMessageRequest = DeleteMessageRequest.builder()

@@ -24,6 +24,9 @@ public class EnrichmentFinalizationService {
     private final EntityManager entityManager;
     private final EnrichmentProgressService progressService;
 
+    /**
+     * Creates the service responsible for final enrichment state transitions.
+     */
     public EnrichmentFinalizationService(ConsolidatedSectionService consolidatedSectionService,
                                          ContentChunkRepository contentChunkRepository,
                                          CleansedDataStoreRepository cleansedDataStoreRepository,
@@ -36,6 +39,9 @@ public class EnrichmentFinalizationService {
         this.progressService = progressService;
     }
 
+    /**
+     * Finalizes a cleansed record by consolidating sections and updating statuses.
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void finalizeCleansedData(CleansedDataStore cleansedDataEntry, boolean allowInlineLockBypass) {
         if (!acquireFinalizationLock(cleansedDataEntry, allowInlineLockBypass)) {
@@ -50,6 +56,9 @@ public class EnrichmentFinalizationService {
         progressService.complete(cleansedDataEntry.getId());
     }
 
+    /**
+     * Acquires a status-based lock to prevent multiple finalization passes.
+     */
     private boolean acquireFinalizationLock(CleansedDataStore cleansedDataEntry, boolean allowInlineLockBypass) {
         UUID id = cleansedDataEntry.getId();
         if (id == null) {
@@ -85,6 +94,9 @@ public class EnrichmentFinalizationService {
         return false;
     }
 
+    /**
+     * Computes the final cleansed status based on enrichment outcomes.
+     */
     private void updateFinalCleansedDataStatus(CleansedDataStore cleansedDataEntry, boolean embeddingsReady) {
         entityManager.flush();
         @SuppressWarnings("unchecked")
@@ -126,6 +138,9 @@ public class EnrichmentFinalizationService {
         logger.info("Finished enrichment for CleansedDataStore ID: {}. Final status: {}", cleansedDataEntry.getId(), finalStatus);
     }
 
+    /**
+     * Marks embeddings as complete and updates final status for a record.
+     */
     @Transactional
     public void markEmbeddingsComplete(UUID cleansedDataStoreId) {
         cleansedDataStoreRepository.findById(cleansedDataStoreId).ifPresent(cleansed -> {

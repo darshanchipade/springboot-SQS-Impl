@@ -13,10 +13,19 @@ import java.util.UUID;
 @Repository
 public interface EnrichedContentRevisionRepository extends JpaRepository<EnrichedContentRevision, UUID> {
 
+    /**
+     * Returns the maximum revision number for an element.
+     */
     @Query("select max(r.revision) from EnrichedContentRevision r where r.enrichedContentElementId = :elementId")
     Integer findMaxRevisionForElement(@Param("elementId") UUID elementId);
 
+    /**
+     * Finds the most recent revision for an element.
+     */
     Optional<EnrichedContentRevision> findFirstByEnrichedContentElementIdOrderByRevisionDesc(UUID elementId);
 
+    /**
+     * Loads all revisions for an element, newest first.
+     */
     List<EnrichedContentRevision> findAllByEnrichedContentElementIdOrderByRevisionDesc(UUID elementId);
 }

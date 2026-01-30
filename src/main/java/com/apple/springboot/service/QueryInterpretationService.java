@@ -35,6 +35,9 @@ public class QueryInterpretationService {
         this.promptTemplate = loadPromptTemplate();
     }
 
+    /**
+     * Calls Bedrock to interpret the user message into structured filters.
+     */
     public Optional<QueryInterpretation> interpret(String userMessage, Map<String, Object> existingContext) {
         if (!StringUtils.hasText(userMessage)) {
             return Optional.empty();
@@ -70,6 +73,9 @@ public class QueryInterpretationService {
         }
     }
 
+    /**
+     * Parses a JSON response into a QueryInterpretation instance.
+     */
     private QueryInterpretation parseInterpretation(JsonNode root, String userMessage) {
         if (root == null || !root.isObject()) {
             return new QueryInterpretation(userMessage, null, null, null, null, null, null, null, List.of(), List.of(), Map.of());
@@ -89,6 +95,9 @@ public class QueryInterpretationService {
         );
     }
 
+    /**
+     * Reads a JSON array or scalar node into a list of strings.
+     */
     private List<String> readArray(JsonNode node) {
         if (node == null || node.isNull()) {
             return List.of();
@@ -112,6 +121,9 @@ public class QueryInterpretationService {
         return Collections.unmodifiableList(new ArrayList<>(values));
     }
 
+    /**
+     * Converts a JSON object node into an immutable map.
+     */
     private Map<String, Object> readObject(JsonNode node) {
         if (node == null || node.isNull() || node.isMissingNode()) {
             return Map.of();
@@ -127,6 +139,9 @@ public class QueryInterpretationService {
         return Collections.unmodifiableMap(new LinkedHashMap<>(map));
     }
 
+    /**
+     * Returns trimmed text when the node is textual, otherwise null.
+     */
     private String textOrNull(JsonNode node) {
         if (node != null && node.isTextual()) {
             String text = node.asText().trim();
@@ -137,11 +152,17 @@ public class QueryInterpretationService {
         return null;
     }
 
+    /**
+     * Returns a textual node value or a default when missing.
+     */
     private String textOrDefault(JsonNode node, String defaultValue) {
         String value = textOrNull(node);
         return value != null ? value : defaultValue;
     }
 
+    /**
+     * Removes Markdown-style code fences around JSON output.
+     */
     private String stripJsonFences(String text) {
         if (text == null) {
             return null;
@@ -157,6 +178,9 @@ public class QueryInterpretationService {
         return trimmed;
     }
 
+    /**
+     * Loads the query interpretation prompt from the classpath.
+     */
     private String loadPromptTemplate() {
         try {
             ClassPathResource resource = new ClassPathResource("prompts/query_interpretation_prompt.txt");
@@ -171,10 +195,16 @@ public class QueryInterpretationService {
         }
     }
 
+    /**
+     * Escapes braces so the prompt template replacement is safe.
+     */
     private String escapeBraces(String input) {
         return input == null ? "" : input.replace("{", "{{").replace("}", "}}");
     }
 
+    /**
+     * Truncates long values to keep log output readable.
+     */
     private String clip(String value) {
         if (!StringUtils.hasText(value)) {
             return value;

@@ -27,6 +27,9 @@ public class S3StorageService {
     private final S3Client s3Client;
     // private final String s3Region; // s3Region stored if needed for other methods, but client is configured with it.
 
+    /**
+     * Initializes an S3 client with the configured AWS region.
+     */
     public S3StorageService(@Value("${app.s3.region}") String s3Region) {
         // this.s3Region = s3Region;
         S3Client client = null;
@@ -49,6 +52,9 @@ public class S3StorageService {
         this.s3Client = client;
     }
 
+    /**
+     * Downloads an S3 object and returns its contents as a UTF-8 string.
+     */
     public String downloadFileContent(String bucketName, String fileKey) {
         if (this.s3Client == null) {
             logger.error("S3Client is not initialized. Cannot download file {} from bucket {}.", fileKey, bucketName);

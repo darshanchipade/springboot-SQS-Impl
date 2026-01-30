@@ -21,6 +21,9 @@ public class RefinementService {
     @Autowired
     private ObjectMapper objectMapper;
 
+    /**
+     * Generates refinement chips by analyzing semantically similar content chunks.
+     */
     public List<RefinementChip> getRefinementChips(String query) throws IOException {
         // Perform a pure semantic search with a balanced threshold to get relevant documents.
         Double threshold = 0.9;
@@ -89,6 +92,9 @@ public class RefinementService {
                 .collect(Collectors.toList());
     }
 
+    /**
+     * Adds context-driven refinement chips to the score map.
+     */
     private void extractContextChips(JsonNode parentNode, List<String> keys, String pathPrefix, Map<RefinementChip, Double> chipScores, double score) {
         if (parentNode.isMissingNode()) return;
 
@@ -101,6 +107,9 @@ public class RefinementService {
         }
     }
 
+    /**
+     * Extracts chips from tags, keywords, and context for counting.
+     */
     private List<RefinementChip> extractChipsForCounting(ConsolidatedEnrichedSection section) {
         List<RefinementChip> chips = new ArrayList<>();
         if (section.getTags() != null) {
@@ -117,6 +126,9 @@ public class RefinementService {
         return chips;
     }
 
+    /**
+     * Appends context chips to a list for count aggregation.
+     */
     private void extractContextChipsForCounting(JsonNode parentNode, List<String> keys, String pathPrefix, List<RefinementChip> chips) {
         if (parentNode.isMissingNode()) return;
 
@@ -127,6 +139,9 @@ public class RefinementService {
             }
         }
     }
+    /**
+     * Converts a vector distance into a normalized similarity score.
+     */
     private double similarityFromDistance(double d) {
         // Works for Euclidean distance: in (0, +inf)
         // Maps to (0,1]; closer → higher similarity.

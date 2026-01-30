@@ -17,6 +17,9 @@ public class EnrichmentProgressService {
         final int expected;
         final AtomicInteger processed = new AtomicInteger(0);
 
+        /**
+         * Creates a progress tracker with the expected item count.
+         */
         Progress(int expected) {
             this.expected = expected;
         }
@@ -24,6 +27,9 @@ public class EnrichmentProgressService {
 
     private final ConcurrentHashMap<UUID, Progress> progressMap = new ConcurrentHashMap<>();
 
+    /**
+     * Starts tracking progress for a cleansed record.
+     */
     public void startTracking(UUID id, int expected) {
         if (id == null || expected <= 0) {
             return;
@@ -32,6 +38,9 @@ public class EnrichmentProgressService {
         logger.info("Enrichment progress tracking started for {} ({} total items).", id, expected);
     }
 
+    /**
+     * Increments the processed counter and logs remaining items.
+     */
     public void increment(UUID id, String label) {
         if (id == null) {
             return;
@@ -50,6 +59,9 @@ public class EnrichmentProgressService {
                 label != null ? " – " + label : "");
     }
 
+    /**
+     * Marks tracking complete and removes the entry from memory.
+     */
     public void complete(UUID id) {
         if (id == null) {
             return;

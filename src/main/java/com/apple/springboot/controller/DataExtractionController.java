@@ -58,6 +58,9 @@ public class DataExtractionController {
             "FILE_PROCESSING_ERROR", "FILE_ERROR"
     );
 
+    /**
+     * Constructs the controller and parses configuration for excluded item types.
+     */
     @Autowired
     public DataExtractionController(DataIngestionService dataIngestionService,
                                     EnrichmentPipelineService enrichmentPipelineService,
@@ -72,11 +75,19 @@ public class DataExtractionController {
         this.objectMapper = objectMapper;
         this.excludedItemTypes = parseExcludedItemTypes(excludedItemTypesProperty);
     }
+
+    /**
+     * Lightweight endpoint used as a simple connectivity check.
+     */
     @GetMapping("/hello")
     public String extractCleanseEnrichAndStore(){
 
         return "Hello there";
     }
+
+    /**
+     * Accepts a JSON file upload, runs ingestion/cleansing, and triggers enrichment.
+     */
     @Operation(
             summary = "Extract, cleanse, enrich and store data from an uploaded JSON file",
             description = "Uploads a JSON file, cleanses it, and triggers enrichment. " +
@@ -108,6 +119,10 @@ public class DataExtractionController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Error reading file");
         }
     }
+
+    /**
+     * Builds a stable source identifier based on the uploaded filename.
+     */
     private String deriveSourceIdentifier(MultipartFile file) {
         // Get the original filename, e.g., "internal-425-Test-1-US.json"
         String originalFilename = file.getOriginalFilename();
@@ -127,6 +142,9 @@ public class DataExtractionController {
         return "file-upload:" + sanitizedFilename;
     }
 
+    /**
+     * Accepts a raw JSON payload and runs the ingestion/cleansing workflow.
+     */
     @Operation(
             summary = "Ingest JSON payload",
             description = "Ingests and processes a JSON payload directly. " +
@@ -176,6 +194,9 @@ public class DataExtractionController {
                     content = @Content(mediaType = "text/plain", schema = @Schema(type = "string"))),
             @ApiResponse(responseCode = "200", description = "Status not found", content = @Content)
     })
+    /**
+     * Returns the current processing status for a cleansed data record.
+     */
     @GetMapping("/cleansed-data-status/{id}")
     public String getStatus(
             @Parameter(description = "UUID of the cleansed data entry", required = true)
@@ -192,6 +213,9 @@ public class DataExtractionController {
             @ApiResponse(responseCode = "200", description = "Context returned successfully"),
             @ApiResponse(responseCode = "404", description = "Cleansed record not found")
     })
+    /**
+     * Retrieves the cached cleansed context and metadata for the record.
+     */
     @GetMapping("/cleansed-context/{id}")
     public ResponseEntity<?> getCleansedContext(
             @Parameter(description = "UUID of the cleansed data entry", required = true)
@@ -211,6 +235,9 @@ public class DataExtractionController {
             @ApiResponse(responseCode = "200", description = "Items retrieved successfully"),
             @ApiResponse(responseCode = "404", description = "Cleansed data record not found")
     })
+    /**
+     * Returns normalized cleansed item rows for UI display.
+     */
     @GetMapping("/cleansed-items/{id}")
     public ResponseEntity<?> getCleansedItems(
             @Parameter(description = "UUID of the cleansed data entry", required = true)
@@ -235,6 +262,9 @@ public class DataExtractionController {
         return ResponseEntity.ok(new CleansedItemsResponse(rows));
     }
 
+    /**
+     * Reads the first non-blank string for the supplied keys.
+     */
     private String pickString(Map<String, Object> item, String... keys) {
         if (item == null) return null;
         for (String k : keys) {
@@ -244,6 +274,9 @@ public class DataExtractionController {
         return null;
     }
 
+    /**
+     * Determines whether an item should be hidden based on skip flags or exclusions.
+     */
     private boolean shouldHideFromCleansedItemsView(Map<String, Object> item) {
         if (item == null) return true;
         boolean skip = extractSkipFlag(item.get("skipEnrichment"));
@@ -256,12 +289,18 @@ public class DataExtractionController {
         return skip || excluded;
     }
 
+    /**
+     * Coerces a boolean-like flag into a boolean value.
+     */
     private boolean extractSkipFlag(Object flag) {
         if (flag instanceof Boolean b) return b;
         if (flag instanceof String s) return Boolean.parseBoolean(s);
         return false;
     }
 
+    /**
+     * Parses excluded item type prefixes from configuration.
+     */
     private Set<String> parseExcludedItemTypes(String property) {
         if (property == null || property.isBlank()) {
             return Set.of();
@@ -273,7 +312,13 @@ public class DataExtractionController {
                 .collect(Collectors.toUnmodifiableSet());
     }
 
+    /**
+     * Maps raw cleansed item maps into the DTO used by the UI.
+     */
     private static class ItemRowMapper implements Function<Map<String, Object>, CleansedItemRow> {
+        /**
+         * Builds a CleansedItemRow from a single cleansed item map.
+         */
         @Override
         public CleansedItemRow apply(Map<String, Object> item) {
             CleansedItemRow row = new CleansedItemRow();
@@ -296,6 +341,9 @@ public class DataExtractionController {
             return row;
         }
 
+        /**
+         * Selects a display field label from the raw item map.
+         */
         private String pickField(Map<String, Object> item) {
             Object field = item.get("field");
             if (field instanceof String && !((String) field).isBlank()) {
@@ -306,11 +354,17 @@ public class DataExtractionController {
             return "Unknown field";
         }
 
+        /**
+         * Returns the string value when the object is already a string.
+         */
         private String pickString(Object value) {
             return value instanceof String ? (String) value : null;
         }
     }
 
+    /**
+     * Resumes ingestion/enrichment for a previously cleansed record.
+     */
     @Operation(
             summary = "Resume ingestion from an existing cleansed record",
             description = "Replays the cleansing pipeline for an existing CleansedDataStore entry using the "
@@ -344,6 +398,10 @@ public class DataExtractionController {
                     .body("Error resuming cleansed record " + cleansedDataStoreId + ": " + e.getMessage());
         }
     }
+
+    /**
+     * Loads the enrichment result payload for the given cleansed data record.
+     */
     @Operation(
             summary = "Fetch enrichment result",
             description = "Returns enriched content elements and metrics for the provided cleansed data ID.")
@@ -374,6 +432,9 @@ public class DataExtractionController {
             @ApiResponse(responseCode = "409", description = "Record not ready for enrichment"),
             @ApiResponse(responseCode = "500", description = "Enrichment trigger failed")
     })
+    /**
+     * Triggers enrichment for a cleansed record that is ready to process.
+     */
     @PostMapping("/enrichment/start/{id}")
     public ResponseEntity<String> startEnrichment(
             @Parameter(description = "UUID of the cleansed data entry", required = true)
@@ -395,6 +456,9 @@ public class DataExtractionController {
         return triggerEnrichmentAsync(cleansedDataEntry, "manual-trigger");
     }
 
+    /**
+     * Builds an HTTP response based on cleansing status and pipeline readiness.
+     */
     private ResponseEntity<String> handleCleansingOutcome(CleansedDataStore cleansedDataEntry, String identifierForLog) {
         if (cleansedDataEntry == null || cleansedDataEntry.getId() == null) {
             String statusMsg = (cleansedDataEntry != null && cleansedDataEntry.getStatus() != null) ?
@@ -436,6 +500,9 @@ public class DataExtractionController {
                 "Cleansing finished. Use POST /api/enrichment/start/" + cleansedDataStoreId + " to trigger enrichment.");
     }
 
+    /**
+     * Starts the enrichment pipeline on a background thread and returns 202.
+     */
     private ResponseEntity<String> triggerEnrichmentAsync(CleansedDataStore cleansedDataEntry, String triggerSource) {
         UUID cleansedDataStoreId = cleansedDataEntry.getId();
         logger.info("Proceeding to enrichment for CleansedDataStore ID: {} via {}", cleansedDataStoreId, triggerSource);
@@ -453,6 +520,9 @@ public class DataExtractionController {
                 .body("Enrichment started for CleansedDataStore " + cleansedDataStoreId + ". Triggered by " + triggerSource + ".");
     }
 
+    /**
+     * Serializes a status response as JSON for consistent API replies.
+     */
     private ResponseEntity<String> buildJsonResponse(HttpStatus status, UUID cleansedDataStoreId, String pipelineStatus, String message) {
         ObjectNode node = objectMapper.createObjectNode();
         if (cleansedDataStoreId != null) {
@@ -467,6 +537,9 @@ public class DataExtractionController {
         return ResponseEntity.status(status).body(node.toString());
     }
 
+    /**
+     * Normalizes status values for client-friendly display.
+     */
     private String normalizeStatus(String status) {
         if (status == null) {
             return null;

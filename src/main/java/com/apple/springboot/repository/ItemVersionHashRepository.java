@@ -9,5 +9,8 @@ import java.util.List;
 
 @Repository
 public interface ItemVersionHashRepository extends JpaRepository<ItemVersionHash, ItemVersionHashId> {
+    /**
+     * Loads item version hashes for a source URI and version.
+     */
     List<ItemVersionHash> findAllBySourceUriAndVersion(String sourceUri, Integer version);
 }

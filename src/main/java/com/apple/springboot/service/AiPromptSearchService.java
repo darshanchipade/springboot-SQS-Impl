@@ -338,6 +338,9 @@ public class AiPromptSearchService {
         return key.trim().toLowerCase();
     }
 
+    /**
+     * Normalizes whitespace and truncates long values for logging.
+     */
     private String clip(String value) {
         if (!StringUtils.hasText(value)) {
             return value;
@@ -349,6 +352,9 @@ public class AiPromptSearchService {
         return normalized.substring(0, LOG_VALUE_LIMIT) + "...";
     }
 
+    /**
+     * Extracts top-level context keys to avoid logging full payloads.
+     */
     private List<String> contextKeys(Map<String, Object> context) {
         if (context == null || context.isEmpty()) {
             return List.of();

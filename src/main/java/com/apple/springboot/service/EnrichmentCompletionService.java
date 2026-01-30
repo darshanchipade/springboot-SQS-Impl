@@ -63,6 +63,9 @@ public class EnrichmentCompletionService {
         return false;
     }
 
+    /**
+     * Checks whether completion tracking is active for a given cleansed record.
+     */
     public boolean isTracking(UUID cleansedDataStoreId) {
         boolean tracking = completionCounters.containsKey(cleansedDataStoreId);
         if (!tracking) {
@@ -71,15 +74,24 @@ public class EnrichmentCompletionService {
         return tracking;
     }
 
+    /**
+     * Returns the number of remaining items, or -1 if not tracked.
+     */
     public int getRemainingCount(UUID cleansedDataStoreId) {
         AtomicInteger counter = completionCounters.get(cleansedDataStoreId);
         return counter != null ? counter.get() : -1;
     }
 
+    /**
+     * Returns the expected item count, or -1 if not tracked.
+     */
     public int getExpectedCount(UUID cleansedDataStoreId) {
         return expectedCounters.getOrDefault(cleansedDataStoreId, -1);
     }
 
+    /**
+     * Forces completion tracking to end and returns whether it was active.
+     */
     public boolean forceComplete(UUID cleansedDataStoreId) {
         AtomicInteger remaining = completionCounters.remove(cleansedDataStoreId);
         expectedCounters.remove(cleansedDataStoreId);

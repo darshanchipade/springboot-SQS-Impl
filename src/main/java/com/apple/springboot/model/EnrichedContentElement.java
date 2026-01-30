@@ -88,6 +88,9 @@ public class EnrichedContentElement {
     private Boolean newAiAvailable;
 
     // Constructors
+    /**
+     * Default constructor for JPA.
+     */
     public EnrichedContentElement() {
     }
 

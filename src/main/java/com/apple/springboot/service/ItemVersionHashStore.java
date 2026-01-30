@@ -30,11 +30,17 @@ public class ItemVersionHashStore {
     // Cached after first check; if schema changes at runtime, restart the app.
     private volatile Boolean tablePresent;
 
+    /**
+     * Creates a store with repository access and direct JDBC health checks.
+     */
     public ItemVersionHashStore(ItemVersionHashRepository itemVersionHashRepository, JdbcTemplate jdbcTemplate) {
         this.itemVersionHashRepository = itemVersionHashRepository;
         this.jdbcTemplate = jdbcTemplate;
     }
 
+    /**
+     * Determines whether the backing table exists, caching the result.
+     */
     boolean isTablePresent() {
         Boolean cached = tablePresent;
         if (cached != null) {
@@ -55,6 +61,9 @@ public class ItemVersionHashStore {
         return present;
     }
 
+    /**
+     * Loads hashes for a source/version pair, returning empty on failure.
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
     public List<ItemVersionHash> safeLoad(String sourceUri, Integer version) {
         if (sourceUri == null || version == null) {
@@ -72,6 +81,9 @@ public class ItemVersionHashStore {
         }
     }
 
+    /**
+     * Persists hash records when the table is available.
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void safeSaveAll(List<ItemVersionHash> hashes) {
         if (hashes == null || hashes.isEmpty()) {

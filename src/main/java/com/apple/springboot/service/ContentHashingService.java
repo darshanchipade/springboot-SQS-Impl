@@ -15,6 +15,9 @@ public class ContentHashingService {
 
     private final MessageDigest digest;
 
+    /**
+     * Initializes the SHA-256 message digest used for content hashing.
+     */
     public ContentHashingService() {
         try {
             this.digest = MessageDigest.getInstance("SHA-256");
@@ -38,6 +41,9 @@ public class ContentHashingService {
         return bytesToHex(encodedhash);
     }
 
+    /**
+     * Converts a raw byte array into a lowercase hexadecimal string.
+     */
     private String bytesToHex(byte[] hash) {
         StringBuilder hexString = new StringBuilder(2 * hash.length);
         for (byte b : hash) {
