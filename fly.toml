@@ -12,9 +12,9 @@ JAVA_OPTS = "-Xms512m -Xmx1024m"
 SERVER_PORT = "8080"
 
 # Spring Boot Datasource (YugabyteDB)
-SPRING_DATASOURCE_URL ="jdbc:postgresql://us-east-1.87570475-5fdd-4a0e-9a8f-b12e92b791c8.aws.yugabyte.cloud:5433/bedrock_enriched_content_db?sslmode=require&sslrootcert=/app/certs/root.crt"
-SPRING_DATASOURCE_USERNAME ="admin"
-SPRING_DATASOURCE_PASSWORD ="L7OIjJInEw94bcCxklWPY3SOQXiTdt"
+SPRING_DATASOURCE_URL ="spring.datasource.url=jdbc:postgresql://54.234.80.209:5433/bedrock_enriched_content_db?sslmode=require&sslrootcert=/app/certs/root.crt"
+SPRING_DATASOURCE_USERNAME ="yugabyte"
+SPRING_DATASOURCE_PASSWORD ="yugabyte"
 
 # AWS Credentials (must be set using fly secrets)
 AWS_REGION = "us-east-2"
