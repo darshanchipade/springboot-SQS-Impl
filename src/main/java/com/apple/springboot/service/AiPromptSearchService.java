@@ -7,6 +7,8 @@ import com.apple.springboot.model.ContentChunkWithDistance;
 import com.apple.springboot.repository.ConsolidatedEnrichedSectionRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -18,6 +20,8 @@ import java.util.stream.Collectors;
 
 @Service
 public class AiPromptSearchService {
+    private static final Logger log = LoggerFactory.getLogger(AiPromptSearchService.class);
+    private static final int LOG_VALUE_LIMIT = 500;
 
     private static final Pattern SECTION_KEY_PATTERN =
             Pattern.compile("(?i)\\b([a-z0-9]+(?:-[a-z0-9]+)*)-section(?:-[a-z0-9]+)*\\b");
@@ -43,6 +47,7 @@ public class AiPromptSearchService {
     public List<ChatbotResultDto> aiSearch(ChatbotRequest request) {
         String userMessage = request != null ? request.getMessage() : null;
         if (!StringUtils.hasText(userMessage)) return List.of();
+        log.info("AI search input message='{}'", clip(userMessage));
 
         // Build prompt -> AI JSON
         String prompt = loadPromptTemplate()
@@ -50,9 +55,14 @@ public class AiPromptSearchService {
                 .replace("{user_message}", userMessage);
 
         JsonNode aiJson = null;
+        String rawResponse = null;
+        String jsonPayload = null;
         try {
-            String raw = bedrockEnrichmentService.invokeChatForText(prompt, null);
-            aiJson = objectMapper.readTree(stripJsonFences(raw));
+            rawResponse = bedrockEnrichmentService.invokeChatForText(prompt, null);
+            jsonPayload = stripJsonFences(rawResponse);
+            aiJson = objectMapper.readTree(jsonPayload);
+            log.info("AI search prompt output raw='{}'", clip(rawResponse));
+            log.info("AI search prompt output parsed='{}'", clip(jsonPayload));
         } catch (ThrottledException te) {
             throw te;
         } catch (Exception ignore) {
@@ -89,6 +99,14 @@ public class AiPromptSearchService {
         }
         tags = tags.stream().filter(StringUtils::hasText).map(String::trim).distinct().collect(Collectors.toList());
         keywords = keywords.stream().filter(StringUtils::hasText).map(String::trim).distinct().collect(Collectors.toList());
+        log.info(
+                "AI search derived query='{}', roleHint='{}', tags={}, keywords={}, contextKeys={}",
+                clip(query),
+                roleHint,
+                tags,
+                keywords,
+                contextKeys(context)
+        );
 
         // Derive section key (from AI context or user text)
         String sectionKey = null;
@@ -101,11 +119,11 @@ public class AiPromptSearchService {
         if (!StringUtils.hasText(sectionKey)) {
             sectionKey = extractSectionKey(userMessage);
         }
-
         // Heuristic role extraction from user message when AI didn't provide one.
         // Note: we'll only apply role filtering if the user explicitly asked for a role.
         boolean userExplicitRole = userExplicitlyRequestedRole(userMessage, sectionKey)
                 || (request != null && StringUtils.hasText(request.getOriginal_field_name()));
+        log.info("AI search derived sectionKey='{}', userExplicitRole={}", sectionKey, userExplicitRole);
         if (!StringUtils.hasText(roleHint)) {
             String inferred = inferRoleHint(userMessage, sectionKey);
             if (StringUtils.hasText(inferred)) {
@@ -318,6 +336,24 @@ public class AiPromptSearchService {
     private String normalizeKey(String key) {
         if (!StringUtils.hasText(key)) return null;
         return key.trim().toLowerCase();
+    }
+
+    private String clip(String value) {
+        if (!StringUtils.hasText(value)) {
+            return value;
+        }
+        String normalized = value.replaceAll("\\s+", " ").trim();
+        if (normalized.length() <= LOG_VALUE_LIMIT) {
+            return normalized;
+        }
+        return normalized.substring(0, LOG_VALUE_LIMIT) + "...";
+    }
+
+    private List<String> contextKeys(Map<String, Object> context) {
+        if (context == null || context.isEmpty()) {
+            return List.of();
+        }
+        return new ArrayList<>(context.keySet());
     }
 
     /**

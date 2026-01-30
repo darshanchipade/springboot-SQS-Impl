@@ -12,7 +12,7 @@ JAVA_OPTS = "-Xms512m -Xmx1024m"
 SERVER_PORT = "8080"
 
 # Spring Boot Datasource (YugabyteDB)
-SPRING_DATASOURCE_URL ="spring.datasource.url=jdbc:postgresql://54.234.80.209:5433/bedrock_enriched_content_db?sslmode=require&sslrootcert=/app/certs/root.crt"
+SPRING_DATASOURCE_URL ="jdbc:postgresql://54.234.80.209:5433/bedrock_enriched_content_db?sslmode=require&sslrootcert=/app/certs/root.crt"
 SPRING_DATASOURCE_USERNAME ="yugabyte"
 SPRING_DATASOURCE_PASSWORD ="yugabyte"
 

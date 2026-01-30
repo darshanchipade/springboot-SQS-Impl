@@ -13,6 +13,8 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
@@ -24,6 +26,8 @@ import java.util.stream.Collectors;
 @RequestMapping("/api")
 @Tag(name = "Search", description = "Vector search and refinement API endpoints")
 public class SearchController {
+    private static final Logger log = LoggerFactory.getLogger(SearchController.class);
+    private static final int LOG_VALUE_LIMIT = 500;
 
     private final RefinementService refinementService;
     private final VectorSearchService vectorSearchService;
@@ -66,6 +70,14 @@ public class SearchController {
     })
     @PostMapping("/search")
     public List<SearchResultDto> search(@RequestBody SearchRequest request) throws IOException {
+        log.info(
+                "Search request query='{}', tags={}, keywords={}, role='{}', contextKeys={}, sectionFilter='{}'",
+                clip(request != null ? request.getQuery() : null),
+                request != null ? request.getTags() : null,
+                request != null ? request.getKeywords() : null,
+                request != null ? request.getOriginal_field_name() : null,
+                request != null ? contextKeys(request.getContext()) : null
+        );
         List<ContentChunkWithDistance> results = vectorSearchService.search(
                 request.getQuery(),
                 request.getOriginal_field_name(),
@@ -86,5 +98,23 @@ public class SearchController {
                     result.getContentChunk().getConsolidatedEnrichedSection().getSectionUri()
             );
         }).collect(Collectors.toList());
+    }
+
+    private String clip(String value) {
+        if (value == null || value.isBlank()) {
+            return value;
+        }
+        String normalized = value.replaceAll("\\s+", " ").trim();
+        if (normalized.length() <= LOG_VALUE_LIMIT) {
+            return normalized;
+        }
+        return normalized.substring(0, LOG_VALUE_LIMIT) + "...";
+    }
+
+    private List<String> contextKeys(java.util.Map<String, Object> context) {
+        if (context == null || context.isEmpty()) {
+            return List.of();
+        }
+        return context.keySet().stream().map(String::valueOf).collect(Collectors.toList());
     }
 }
