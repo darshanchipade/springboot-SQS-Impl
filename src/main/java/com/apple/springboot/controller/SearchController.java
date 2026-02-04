@@ -58,8 +58,10 @@ public class SearchController {
     @GetMapping("/refine")
     public List<RefinementChip> getRefinementChips(
             @Parameter(description = "Search query to generate refinement chips for", required = true)
-            @RequestParam String query) throws IOException {
-        return refinementService.getRefinementChips(query);
+            @RequestParam String query,
+            @Parameter(description = "Maximum number of chips to return (default 15)")
+            @RequestParam(required = false) Integer limit) throws IOException {
+        return refinementService.getRefinementChips(query, limit);
     }
 
     /**
