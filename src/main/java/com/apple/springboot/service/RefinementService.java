@@ -149,6 +149,12 @@ public class RefinementService {
         List<RefinementChip> limited = new ArrayList<>(sortedChips.stream().limit(chipLimit).toList());
         ensureTypeIncluded(limited, sortedChips, "sectionName", chipLimit);
         ensureTypeIncluded(limited, sortedChips, "sectionKey", chipLimit);
+        for (String sectionKey : sectionKeys) {
+            ensureValueIncluded(limited, sortedChips, "sectionKey", sectionKey, chipLimit);
+        }
+        for (String roleHint : roleHints) {
+            ensureValueIncluded(limited, sortedChips, "sectionName", roleHint, chipLimit);
+        }
         return limited;
     }
 
@@ -416,6 +422,34 @@ public class RefinementService {
         if (candidate == null) {
             return;
         }
+        if (limited.size() < limit) {
+            limited.add(candidate);
+        } else if (!limited.isEmpty()) {
+            limited.set(limited.size() - 1, candidate);
+        }
+    }
+
+    /**
+     * Ensures a specific chip value is present when derived from the query.
+     */
+    private void ensureValueIncluded(List<RefinementChip> limited,
+                                     List<RefinementChip> sortedChips,
+                                     String type,
+                                     String value,
+                                     int limit) {
+        if (limited == null || sortedChips == null || type == null || value == null) {
+            return;
+        }
+        boolean alreadyPresent = limited.stream()
+                .anyMatch(chip -> type.equals(chip.getType()) && value.equalsIgnoreCase(chip.getValue()));
+        if (alreadyPresent) {
+            return;
+        }
+        RefinementChip candidate = sortedChips.stream()
+                .filter(chip -> type.equals(chip.getType()))
+                .filter(chip -> value.equalsIgnoreCase(chip.getValue()))
+                .findFirst()
+                .orElse(new RefinementChip(value, type, 0));
         if (limited.size() < limit) {
             limited.add(candidate);
         } else if (!limited.isEmpty()) {
