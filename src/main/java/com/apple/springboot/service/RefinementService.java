@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.io.IOException;
 import java.util.*;
@@ -44,11 +45,11 @@ public class RefinementService {
             ConsolidatedEnrichedSection section = chunkWithDistance.getContentChunk().getConsolidatedEnrichedSection();
             if (section == null) continue;
 
-//            if (section.getOriginalFieldName() != null) {
-//                String original_field_name= section.getOriginalFieldName();
-//                    RefinementChip chip = new RefinementChip(original_field_name, "original_field_name", 0);
-//                    chipScores.merge(chip, score, Double::sum);
-//            }
+            String originalFieldName = section.getOriginalFieldName();
+            if (StringUtils.hasText(originalFieldName)) {
+                RefinementChip chip = new RefinementChip(originalFieldName.trim(), "sectionName", 0);
+                chipScores.merge(chip, score, Double::sum);
+            }
 
             // Extract Tags
             if (section.getTags() != null) {
@@ -68,7 +69,7 @@ public class RefinementService {
             // Extract from nested context based on simplified requirements
             if (section.getContext() != null) {
                 JsonNode contextNode = objectMapper.valueToTree(section.getContext());
-                extractContextChips(contextNode.path("facets"), List.of("sectionKey", "eventType"), "facets", chipScores, score);
+                extractContextChips(contextNode.path("facets"), List.of("sectionKey", "sectionName", "eventType"), "facets", chipScores, score);
                 extractContextChips(contextNode.path("envelope"), List.of("sectionName", "locale", "country"), "envelope", chipScores, score);
             }
         }
@@ -112,6 +113,9 @@ public class RefinementService {
      */
     private List<RefinementChip> extractChipsForCounting(ConsolidatedEnrichedSection section) {
         List<RefinementChip> chips = new ArrayList<>();
+        if (StringUtils.hasText(section.getOriginalFieldName())) {
+            chips.add(new RefinementChip(section.getOriginalFieldName().trim(), "sectionName", 0));
+        }
         if (section.getTags() != null) {
             section.getTags().forEach(tag -> chips.add(new RefinementChip(tag, "Tag", 0)));
         }
@@ -120,7 +124,7 @@ public class RefinementService {
         }
         if (section.getContext() != null) {
             JsonNode contextNode = objectMapper.valueToTree(section.getContext());
-            extractContextChipsForCounting(contextNode.path("facets"), List.of("sectionModel", "eventType"), "facets", chips);
+            extractContextChipsForCounting(contextNode.path("facets"), List.of("sectionKey", "sectionName", "sectionModel", "eventType"), "facets", chips);
             extractContextChipsForCounting(contextNode.path("envelope"), List.of("sectionName", "locale", "country"), "envelope", chips);
         }
         return chips;
