@@ -3,6 +3,7 @@ package com.apple.springboot.service;
 import com.apple.springboot.model.ConsolidatedEnrichedSection;
 import com.apple.springboot.model.ContentChunkWithDistance;
 import com.apple.springboot.model.RefinementChip;
+import com.apple.springboot.repository.ConsolidatedEnrichedSectionRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -12,6 +13,8 @@ import org.springframework.util.StringUtils;
 import java.io.IOException;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Service
 public class RefinementService {
@@ -21,6 +24,13 @@ public class RefinementService {
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    @Autowired
+    private ConsolidatedEnrichedSectionRepository consolidatedRepo;
+
+    private static final Pattern SECTION_KEY_PATTERN =
+            Pattern.compile("(?i)\\b([a-z0-9]+(?:-[a-z0-9]+)*)-section(?:-[a-z0-9]+)*\\b");
+    private static final double SECTION_KEY_SCORE_WEIGHT = 0.2;
 
     /**
      * Generates refinement chips by analyzing semantically similar content chunks.
@@ -75,10 +85,13 @@ public class RefinementService {
             }
         }
 
+        List<ConsolidatedEnrichedSection> supplementalSections = loadSectionsForQuery(query);
+        if (!supplementalSections.isEmpty()) {
+            mergeChipsFromSections(supplementalSections, chipScores, SECTION_KEY_SCORE_WEIGHT);
+        }
+
         // Get the count for each chip for display
-        Map<RefinementChip, Long> chipCounts = initialChunks.stream()
-                .map(chunk -> chunk.getContentChunk().getConsolidatedEnrichedSection())
-                .filter(Objects::nonNull)
+        Map<RefinementChip, Long> chipCounts = mergeForCounting(initialChunks, supplementalSections).stream()
                 .flatMap(section -> extractChipsForCounting(section).stream())
                 .collect(Collectors.groupingBy(chip -> chip, Collectors.counting()));
 
@@ -145,6 +158,86 @@ public class RefinementService {
                 chips.add(new RefinementChip(valueNode.asText(), "Context:" + pathPrefix + "." + key, 0));
             }
         }
+    }
+
+    /**
+     * Loads sections that match section keys extracted from the query.
+     */
+    private List<ConsolidatedEnrichedSection> loadSectionsForQuery(String query) {
+        if (!StringUtils.hasText(query)) {
+            return List.of();
+        }
+        Set<String> sectionKeys = extractSectionKeys(query);
+        if (sectionKeys.isEmpty()) {
+            return List.of();
+        }
+        List<ConsolidatedEnrichedSection> matched = new ArrayList<>();
+        for (String key : sectionKeys) {
+            matched.addAll(consolidatedRepo.findBySectionKey(key, 200));
+        }
+        return matched;
+    }
+
+    /**
+     * Extracts section keys from the raw query text.
+     */
+    private Set<String> extractSectionKeys(String query) {
+        Set<String> keys = new LinkedHashSet<>();
+        Matcher matcher = SECTION_KEY_PATTERN.matcher(query);
+        while (matcher.find()) {
+            String key = matcher.group(0);
+            if (StringUtils.hasText(key)) {
+                keys.add(key.toLowerCase(Locale.ROOT));
+            }
+        }
+        return keys;
+    }
+
+    /**
+     * Adds chips from matching sections with a base score weight.
+     */
+    private void mergeChipsFromSections(List<ConsolidatedEnrichedSection> sections,
+                                        Map<RefinementChip, Double> chipScores,
+                                        double weight) {
+        if (sections == null || sections.isEmpty()) {
+            return;
+        }
+        double score = Math.max(0.01, weight);
+        for (ConsolidatedEnrichedSection section : sections) {
+            if (section == null) {
+                continue;
+            }
+            List<RefinementChip> chips = extractChipsForCounting(section);
+            for (RefinementChip chip : chips) {
+                chipScores.merge(chip, score, Double::sum);
+            }
+        }
+    }
+
+    /**
+     * Merges sections from vector results and supplemental matches for counting.
+     */
+    private List<ConsolidatedEnrichedSection> mergeForCounting(List<ContentChunkWithDistance> initialChunks,
+                                                               List<ConsolidatedEnrichedSection> supplementalSections) {
+        LinkedHashMap<UUID, ConsolidatedEnrichedSection> merged = new LinkedHashMap<>();
+        if (initialChunks != null) {
+            for (ContentChunkWithDistance chunk : initialChunks) {
+                ConsolidatedEnrichedSection section = chunk != null && chunk.getContentChunk() != null
+                        ? chunk.getContentChunk().getConsolidatedEnrichedSection()
+                        : null;
+                if (section != null && section.getId() != null) {
+                    merged.put(section.getId(), section);
+                }
+            }
+        }
+        if (supplementalSections != null) {
+            for (ConsolidatedEnrichedSection section : supplementalSections) {
+                if (section != null && section.getId() != null) {
+                    merged.putIfAbsent(section.getId(), section);
+                }
+            }
+        }
+        return new ArrayList<>(merged.values());
     }
 
     /**
