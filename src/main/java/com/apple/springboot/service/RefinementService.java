@@ -26,9 +26,10 @@ public class RefinementService {
      * Generates refinement chips by analyzing semantically similar content chunks.
      */
     public List<RefinementChip> getRefinementChips(String query) throws IOException {
-        // Perform a pure semantic search with a balanced threshold to get relevant documents.
-        Double threshold = 0.9;
-        List<ContentChunkWithDistance> initialChunks = vectorSearchService.search(query, null,20, null, null, null, threshold,null);
+        // Perform a semantic search across a broader candidate set for chip coverage.
+        Double threshold = null;
+        int initialLimit = 50;
+        List<ContentChunkWithDistance> initialChunks = vectorSearchService.search(query, null, initialLimit, null, null, null, threshold, null);
 
         if (initialChunks.isEmpty()) {
             return Collections.emptyList();
@@ -82,15 +83,17 @@ public class RefinementService {
                 .collect(Collectors.groupingBy(chip -> chip, Collectors.counting()));
 
 
-        return chipScores.entrySet().stream()
+        List<RefinementChip> sortedChips = chipScores.entrySet().stream()
                 .sorted(Map.Entry.<RefinementChip, Double>comparingByValue().reversed())
-                .limit(10)
                 .map(entry -> {
                     RefinementChip chip = entry.getKey();
                     chip.setCount(chipCounts.getOrDefault(chip, 0L).intValue());
                     return chip;
                 })
                 .collect(Collectors.toList());
+        List<RefinementChip> limited = new ArrayList<>(sortedChips.stream().limit(10).toList());
+        ensureTypeIncluded(limited, sortedChips, "sectionName", 10);
+        return limited;
     }
 
     /**
@@ -141,6 +144,34 @@ public class RefinementService {
             if (valueNode.isTextual() && !valueNode.asText().isBlank()) {
                 chips.add(new RefinementChip(valueNode.asText(), "Context:" + pathPrefix + "." + key, 0));
             }
+        }
+    }
+
+    /**
+     * Ensures at least one chip of the requested type appears in the limited list.
+     */
+    private void ensureTypeIncluded(List<RefinementChip> limited,
+                                    List<RefinementChip> sortedChips,
+                                    String type,
+                                    int limit) {
+        if (limited == null || sortedChips == null || type == null) {
+            return;
+        }
+        boolean alreadyPresent = limited.stream().anyMatch(chip -> type.equals(chip.getType()));
+        if (alreadyPresent) {
+            return;
+        }
+        RefinementChip candidate = sortedChips.stream()
+                .filter(chip -> type.equals(chip.getType()))
+                .findFirst()
+                .orElse(null);
+        if (candidate == null) {
+            return;
+        }
+        if (limited.size() < limit) {
+            limited.add(candidate);
+        } else if (!limited.isEmpty()) {
+            limited.set(limited.size() - 1, candidate);
         }
     }
     /**
