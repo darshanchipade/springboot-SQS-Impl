@@ -23,12 +23,18 @@ public class EnrichmentReadService {
     private final CleansedDataStoreRepository cleansedDataStoreRepository;
     private final EnrichedContentElementRepository enrichedContentElementRepository;
 
+    /**
+     * Creates the read service used by enrichment view endpoints.
+     */
     public EnrichmentReadService(CleansedDataStoreRepository cleansedDataStoreRepository,
                                  EnrichedContentElementRepository enrichedContentElementRepository) {
         this.cleansedDataStoreRepository = cleansedDataStoreRepository;
         this.enrichedContentElementRepository = enrichedContentElementRepository;
     }
 
+    /**
+     * Loads a cleansed context snapshot and enriches it with metadata.
+     */
     public Optional<CleansedContextResponse> loadCleansedContext(UUID cleansedId) {
         return cleansedDataStoreRepository.findById(cleansedId).map(store -> {
             CleansedContextResponse response = new CleansedContextResponse();
@@ -41,6 +47,9 @@ public class EnrichmentReadService {
         });
     }
 
+    /**
+     * Loads enrichment results and aggregates metrics for the response.
+     */
     public Optional<EnrichmentResultResponse> loadEnrichmentResult(UUID cleansedId) {
         List<EnrichedContentElement> elements = enrichedContentElementRepository
                 .findByCleansedDataIdOrderByEnrichedAtAsc(cleansedId);
@@ -53,6 +62,9 @@ public class EnrichmentReadService {
         return Optional.of(response);
     }
 
+    /**
+     * Builds response metadata from a cleansed record.
+     */
     private CleansedContextResponse.Metadata buildMetadata(CleansedDataStore store) {
         return CleansedContextResponse.buildMetadata(
                 store.getId(),
@@ -64,6 +76,9 @@ public class EnrichmentReadService {
         );
     }
 
+    /**
+     * Creates a basic status history for the cleansed record.
+     */
     private List<CleansedContextResponse.StatusEntry> buildStatusHistory(CleansedDataStore store) {
         List<CleansedContextResponse.StatusEntry> history = new ArrayList<>();
         history.add(CleansedContextResponse.buildStatusEntry("ENRICHMENT_TRIGGERED", store.getCleansedAt()));
@@ -73,6 +88,9 @@ public class EnrichmentReadService {
         return history;
     }
 
+    /**
+     * Returns the stored cleansed items list or an empty list.
+     */
     @SuppressWarnings("unchecked")
     private List<Map<String, Object>> extractItems(CleansedDataStore store) {
         List<Map<String, Object>> cleansedItems = store.getCleansedItems();
@@ -82,6 +100,9 @@ public class EnrichmentReadService {
         return cleansedItems;
     }
 
+    /**
+     * Aggregates metrics across enriched content elements.
+     */
     private EnrichmentResultResponse.Metrics buildMetrics(List<EnrichedContentElement> elements) {
         EnrichmentResultResponse.Metrics metrics = new EnrichmentResultResponse.Metrics();
         Integer fieldsTagged = sumIntegers(elements, "getFieldsTagged");
@@ -95,10 +116,16 @@ public class EnrichmentReadService {
         return metrics;
     }
 
+    /**
+     * Converts a timestamp into epoch milliseconds.
+     */
     private Long asEpochMillis(OffsetDateTime timestamp) {
         return timestamp != null ? timestamp.toInstant().toEpochMilli() : null;
     }
 
+    /**
+     * Sums integer values from a numeric getter on each element.
+     */
     private Integer sumIntegers(List<EnrichedContentElement> elements, String getterName) {
         int sum = 0;
         boolean found = false;
@@ -112,6 +139,9 @@ public class EnrichmentReadService {
         return found ? sum : null;
     }
 
+    /**
+     * Computes the average of a numeric getter across all elements.
+     */
     private Double averageDoubles(List<EnrichedContentElement> elements, String getterName) {
         double total = 0;
         int count = 0;
@@ -125,6 +155,9 @@ public class EnrichmentReadService {
         return count > 0 ? total / count : null;
     }
 
+    /**
+     * Invokes a numeric getter by name using reflection.
+     */
     private Number invokeNumberGetter(EnrichedContentElement element, String getterName) {
         try {
             Method method = element.getClass().getMethod(getterName);

@@ -51,10 +51,16 @@ public class ChatbotResultDto {
     @JsonIgnore
     private String language;
 
+    /**
+     * Legacy constructor retained for compatibility with older mappers.
+     */
     public <T> ChatbotResultDto(String originalFieldName, String s, String sectionPath, String sectionUri, String chunkText, String source, String originalFieldName1, int rank, double distance, String string, String lastModified, List<T> ts) {
     }
 
     // Also expose a "text" alias for clients that expect it
+    /**
+     * Returns the cleansed text under a legacy "text" alias.
+     */
     @JsonProperty("text")
     public String getText() { return cleansedText; }
 
@@ -75,10 +81,16 @@ public class ChatbotResultDto {
     @JsonProperty("context")
     private Map<String, Object> context;
 
+    /**
+     * Sets the context, trimming to key portions used by clients.
+     */
     public void setContext(Map<String, Object> context) {
         this.context = slimContext(context);
     }
 
+    /**
+     * Filters the context to a minimal set of keys.
+     */
     private Map<String, Object> slimContext(Map<String, Object> context) {
         if (context == null) {
             return null;

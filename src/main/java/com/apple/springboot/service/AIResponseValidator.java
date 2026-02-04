@@ -69,6 +69,9 @@ public class AIResponseValidator {
         return true;
     }
 
+    /**
+     * Checks whether a map contains a non-null value for a key with the expected type.
+     */
     private boolean isFieldPresentAndOfType(Map<String, Object> map, String key, Class<?> type) {
         Object value = map.get(key);
         if (value == null) {

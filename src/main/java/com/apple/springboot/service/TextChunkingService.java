@@ -9,6 +9,9 @@ import java.util.List;
 @Service
 public class TextChunkingService {
 
+    /**
+     * Splits input text into chunks suitable for embedding.
+     */
     public List<String> chunkIfNeeded(String text) {
         if (text == null || text.trim().isEmpty()) return List.of();
 
@@ -26,6 +29,9 @@ public class TextChunkingService {
 //        // Downstream search can handle full sections, so we skip sentence-level chunking.
 //        return List.of(text.trim());
 //    }
+    /**
+     * Breaks long text into sentence-based chunks with overlap.
+     */
     private List<String> chunkBySentences(String text) {
         String[] rawSentences = text.split("(?<=[.!?])\\s+");
         List<String> sentences = new ArrayList<>();

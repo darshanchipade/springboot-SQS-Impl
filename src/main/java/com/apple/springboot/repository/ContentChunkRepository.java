@@ -14,8 +14,14 @@ import java.util.UUID;
 
 @Repository
 public interface ContentChunkRepository extends JpaRepository<ContentChunk, UUID>, ContentChunkRepositoryCustom {
+    /**
+     * Finds a content chunk by section and chunk text.
+     */
     Optional<ContentChunk> findByConsolidatedEnrichedSectionAndChunkText(ConsolidatedEnrichedSection section, String chunkText);
 
+    /**
+     * Deletes content chunks belonging to a cleansed record.
+     */
     @Transactional
     @Modifying
     @Query("delete from ContentChunk cc where cc.consolidatedEnrichedSection.cleansedDataId = :cleansedDataId")

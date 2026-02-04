@@ -57,9 +57,15 @@ public class ItemVersionHash {
     @Column(name = "updated_at", nullable = false)
     private OffsetDateTime updatedAt;
 
+    /**
+     * Default constructor for JPA.
+     */
     public ItemVersionHash() {
     }
 
+    /**
+     * Creates a per-version content hash record.
+     */
     public ItemVersionHash(String sourceUri,
                            Integer version,
                            String sourcePath,
@@ -76,6 +82,9 @@ public class ItemVersionHash {
         this.contextHash = contextHash;
     }
 
+    /**
+     * Initializes timestamps before insert.
+     */
     @PrePersist
     void onCreate() {
         OffsetDateTime now = OffsetDateTime.now();
@@ -83,6 +92,9 @@ public class ItemVersionHash {
         updatedAt = now;
     }
 
+    /**
+     * Updates timestamps before update.
+     */
     @PreUpdate
     void onUpdate() {
         updatedAt = OffsetDateTime.now();

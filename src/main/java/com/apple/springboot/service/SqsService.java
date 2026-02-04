@@ -20,6 +20,9 @@ public class SqsService {
     private final ObjectMapper objectMapper;
     private final String queueUrl;
 
+    /**
+     * Creates an SQS publisher bound to the configured queue URL.
+     */
     public SqsService(SqsClient sqsClient,
                       ObjectMapper objectMapper,
                       @Value("${aws.sqs.queue.url}") String queueUrl) {
@@ -28,6 +31,9 @@ public class SqsService {
         this.queueUrl = queueUrl;
     }
 
+    /**
+     * Sends a single message payload to the SQS queue.
+     */
     public void sendMessage(Object messagePayload) {
         try {
             String messageBody = objectMapper.writeValueAsString(messagePayload);
@@ -44,6 +50,9 @@ public class SqsService {
         }
     }
 
+    /**
+     * Sends a list of payloads in batches of up to 10 messages.
+     */
     public <T> void sendMessages(java.util.List<T> messagePayloads) {
         if (messagePayloads == null || messagePayloads.isEmpty()) {
             return;
@@ -74,6 +83,9 @@ public class SqsService {
         }
     }
 
+    /**
+     * Splits a list into fixed-size sublists for batch requests.
+     */
     private <T> java.util.List<java.util.List<T>> partition(java.util.List<T> list, int size) {
         java.util.List<java.util.List<T>> parts = new java.util.ArrayList<>();
         if (list == null || list.isEmpty() || size <= 0) {

@@ -10,10 +10,16 @@ import java.util.TreeMap;
 @EqualsAndHashCode(callSuper = false)
 public class Facets extends TreeMap<String, Object> {
 
+    /**
+     * Creates an empty facets map.
+     */
     public Facets() {
         super();
     }
 
+    /**
+     * Creates a copy of another facets instance.
+     */
     public Facets(Facets other) {
         super(other);
     }

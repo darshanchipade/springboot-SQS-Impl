@@ -51,8 +51,11 @@ public class DataExtractionService {
     //private static final Pattern WJ_PATTERN = Pattern.compile("\\(\\{%wj%\\}\\)");
     private static final Pattern NESTED_URL_PATTERN = Pattern.compile(":\\[\\s*:\\[[^\\]]+\\]\\(\\{%url metadata=\"\\d+\" destination-type=\"[^\"]+\"%\\}\\)\\]\\(\\{%wj%\\}\\)");
     private static final Pattern METADATA_PATTERN = Pattern.compile("\\{% metadata=\"\\d+\" %\\}");
-   // private static final Pattern APR_PATTERN = Pattern.compile("\\{%apr value=\"[^\"]+\"%\\}");
+    // private static final Pattern APR_PATTERN = Pattern.compile("\\{%apr value=\"[^\"]+\"%\\}");
 
+    /**
+     * Creates the extraction service with a configured JSON mapper.
+     */
     @Autowired
     public DataExtractionService(ResourceLoader resourceLoader, ObjectMapper objectMapper) {
         this.resourceLoader = resourceLoader;

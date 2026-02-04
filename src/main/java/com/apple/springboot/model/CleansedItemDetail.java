@@ -1,3 +1,4 @@
+
 package com.apple.springboot.model;
 
 public class CleansedItemDetail {
@@ -8,6 +9,9 @@ public class CleansedItemDetail {
     public final EnrichmentContext context;
     public final boolean skipEnrichment;
 
+    /**
+     * Builds a typed detail object for a cleansed item.
+     */
     public CleansedItemDetail(String sourcePath, String originalFieldName, String cleansedContent, String model, EnrichmentContext context, boolean skipEnrichment) {
         this.sourcePath = sourcePath;
         this.originalFieldName = originalFieldName;

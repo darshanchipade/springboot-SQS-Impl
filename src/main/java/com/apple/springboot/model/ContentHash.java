@@ -31,9 +31,15 @@ public class ContentHash {
     @Column(name = "context_hash", columnDefinition = "TEXT")
     private String contextHash;
 
+    /**
+     * JPA default constructor for ContentHash.
+     */
     public ContentHash() {
     }
 
+    /**
+     * Creates a content hash record with optional usagePath.
+     */
     public ContentHash(String sourcePath, String itemType, String usagePath, String contentHash, String contextHash) {
         this.sourcePath = sourcePath;
         this.itemType = itemType;
@@ -43,6 +49,9 @@ public class ContentHash {
     }
 
     // Backward-compat constructor if needed elsewhere
+    /**
+     * Legacy constructor without usagePath for backward compatibility.
+     */
     public ContentHash(String sourcePath, String itemType, String contentHash, String contextHash) {
         this(sourcePath, itemType, null, contentHash, contextHash);
     }

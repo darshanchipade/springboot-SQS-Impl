@@ -25,6 +25,9 @@ public class ConsolidatedSectionService {
     private final ContentHashRepository contentHashRepository;
     private static final String USAGE_REF_DELIM = " ::ref:: ";
 
+    /**
+     * Builds the service used to consolidate enriched sections.
+     */
     public ConsolidatedSectionService(EnrichedContentElementRepository enrichedRepo,
                                       ConsolidatedEnrichedSectionRepository consolidatedRepo,
                                       ContentHashRepository contentHashRepository) {
@@ -33,6 +36,9 @@ public class ConsolidatedSectionService {
         this.contentHashRepository = contentHashRepository;
     }
 
+    /**
+     * Persists consolidated section rows for a cleansed data snapshot.
+     */
     @Transactional
     public void saveFromCleansedEntry(CleansedDataStore cleansedData) {
         List<EnrichedContentElement> enrichedItems = enrichedRepo.findAllByCleansedDataId(cleansedData.getId());
@@ -102,6 +108,9 @@ public class ConsolidatedSectionService {
         }
     }
 
+    /**
+     * Loads consolidated sections for a given cleansed record.
+     */
     @Transactional(readOnly = true)
     public List<ConsolidatedEnrichedSection> getSectionsFor(CleansedDataStore cleansedData) {
         if (cleansedData == null || cleansedData.getId() == null) {
@@ -110,6 +119,9 @@ public class ConsolidatedSectionService {
         return consolidatedRepo.findAllByCleansedDataId(cleansedData.getId());
     }
 
+    /**
+     * Extracts usagePath from context, falling back to itemSourcePath.
+     */
     @SuppressWarnings("unchecked")
     private String extractUsagePath(EnrichedContentElement item) {
         Map<String, Object> ctx = item.getContext();
@@ -125,6 +137,9 @@ public class ConsolidatedSectionService {
         return item.getItemSourcePath();
     }
 
+    /**
+     * Splits a usagePath into sectionPath and sectionUri segments.
+     */
     private String[] splitUsagePath(String usagePath) {
         if (usagePath == null || usagePath.isBlank()) return new String[]{null, null};
         int idx = usagePath.indexOf(USAGE_REF_DELIM);
@@ -134,6 +149,9 @@ public class ConsolidatedSectionService {
         return new String[]{left.isEmpty() ? null : left, right.isEmpty() ? null : right};
     }
 
+    /**
+     * Builds a map of usage paths keyed by source path and original field name.
+     */
     private Map<String, Set<String>> buildUsageIndex(CleansedDataStore cleansedData,
                                                      List<EnrichedContentElement> enrichedItems) {
         Map<String, Set<String>> index = new HashMap<>();
@@ -182,26 +200,41 @@ public class ConsolidatedSectionService {
         return index;
     }
 
+    /**
+     * Builds a stable key for usage path indexing.
+     */
     private String usageKey(String sourcePath, String originalFieldName) {
         return sourcePath + "\u0001" + originalFieldName;
     }
 
+    /**
+     * Marks sections as pending embedding for the supplied cleansed data version.
+     */
     @Transactional
     public void markSectionsPendingEmbedding(UUID cleansedDataId, Integer version) {
         consolidatedRepo.updateStatusForCleansedData(cleansedDataId, version, EmbeddingStatus.SECTION_PENDING);
         consolidatedRepo.updateBlankSectionsStatus(cleansedDataId, version, EmbeddingStatus.SECTION_EMBEDDED);
     }
 
+    /**
+     * Marks a single consolidated section as embedded.
+     */
     @Transactional
     public void markSectionEmbedded(UUID sectionId) {
         consolidatedRepo.updateStatusForSection(sectionId, EmbeddingStatus.SECTION_EMBEDDED);
     }
 
+    /**
+     * Resets a section back to the pending embedding state.
+     */
     @Transactional
     public void resetSectionToPending(UUID sectionId) {
         consolidatedRepo.updateStatusForSection(sectionId, EmbeddingStatus.SECTION_PENDING);
     }
 
+    /**
+     * Counts how many sections for a cleansed record still need embeddings.
+     */
     @Transactional(readOnly = true)
     public long countSectionsMissingEmbeddings(UUID cleansedDataId) {
         return consolidatedRepo.countSectionsMissingEmbeddings(cleansedDataId);

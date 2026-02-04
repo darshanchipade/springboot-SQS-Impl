@@ -17,6 +17,9 @@ public class ContextUpdateService {
     private final EnrichedContentElementRepository enrichedRepo;
     private final ConsolidatedEnrichedSectionRepository consolidatedRepo;
 
+    /**
+     * Creates the service used to update context metadata on stored rows.
+     */
     public ContextUpdateService(EnrichedContentElementRepository enrichedRepo,
                                 ConsolidatedEnrichedSectionRepository consolidatedRepo) {
         this.enrichedRepo = enrichedRepo;

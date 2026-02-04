@@ -19,6 +19,9 @@ public class ContentChunkRepositoryImpl implements ContentChunkRepositoryCustom 
     @PersistenceContext
     private EntityManager entityManager;
 
+    /**
+     * Builds and executes a native query for vector similarity search.
+     */
     @Override
     public List<ContentChunkWithDistance> findSimilar(float[] embedding, String originalFieldName, String[] tags, String[] keywords, Map<String, Object> contextMap, Double threshold, int limit, String sectionKeyFilter) {
         StringBuilder sql = new StringBuilder("SELECT c.*");
@@ -88,6 +91,9 @@ public class ContentChunkRepositoryImpl implements ContentChunkRepositoryCustom 
         return dtos;
     }
 
+    /**
+     * Appends JSONB query predicates for context map filters.
+     */
     private void buildJsonbQueries(Map<String, Object> map, List<String> path, StringBuilder sql, Map<String, Object> params) {
         for (Map.Entry<String, Object> entry : map.entrySet()) {
             List<String> newPath = new ArrayList<>(path);

@@ -5,6 +5,9 @@ import java.util.List;
 import java.util.Map;
 
 public interface ContentChunkRepositoryCustom {
+    /**
+     * Finds content chunks similar to the provided embedding with optional filters.
+     */
     List<ContentChunkWithDistance> findSimilar(
             float[] embedding,
             String original_field_name,

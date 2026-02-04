@@ -34,6 +34,9 @@ public class EnrichmentPersistenceService {
     private final EntityManager entityManager;
     private final ContentHashingService contentHashingService;
 
+    /**
+     * Creates the persistence service used during enrichment processing.
+     */
     public EnrichmentPersistenceService(EnrichedContentElementRepository enrichedContentElementRepository,
                                         EnrichedContentRevisionRepository revisionRepository,
                                         ObjectMapper objectMapper,
@@ -46,6 +49,9 @@ public class EnrichmentPersistenceService {
         this.contentHashingService = contentHashingService;
     }
 
+    /**
+     * Persists a successfully enriched element and records an AI revision.
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void saveEnrichedElement(CleansedItemDetail itemDetail, CleansedDataStore parentEntry,
                                     Map<String, Object> bedrockResponse, String elementStatus) throws JsonProcessingException {
@@ -114,6 +120,9 @@ public class EnrichmentPersistenceService {
         logger.info("Persisted {} status for CleansedDataStore ID {}", elementStatus, parentEntry.getId());
     }
 
+    /**
+     * Persists an enrichment element when an error occurred.
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void saveErrorEnrichedElement(CleansedItemDetail itemDetail, CleansedDataStore parentEntry, String status, String errorMessage) {
 
@@ -151,6 +160,9 @@ public class EnrichmentPersistenceService {
         logger.debug("Saved error element for item path: {}", itemDetail.sourcePath);
     }
 
+    /**
+     * Persists an element that was skipped from enrichment.
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void saveSkippedEnrichedElement(CleansedItemDetail itemDetail, CleansedDataStore parentEntry, String status) {
 
@@ -190,6 +202,9 @@ public class EnrichmentPersistenceService {
         logger.debug("Saved skipped enrichment element for item path: {}", itemDetail.sourcePath);
     }
 
+    /**
+     * Records an AI revision entry for a processed element.
+     */
     private void recordAiRevision(EnrichedContentElement element,
                                   String summary,
                                   String classification,
@@ -229,6 +244,9 @@ public class EnrichmentPersistenceService {
         revisionRepository.save(revision);
     }
 
+    /**
+     * Logs the current row count for a cleansed data record.
+     */
     private void logRowCount(UUID cleansedDataId, String context) {
         if (cleansedDataId == null) {
             return;
