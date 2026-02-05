@@ -4,32 +4,55 @@ import com.apple.springboot.dto.CleansedContextResponse;
 import com.apple.springboot.dto.EnrichmentResultResponse;
 import com.apple.springboot.model.CleansedDataStore;
 import com.apple.springboot.model.EnrichedContentElement;
+import com.apple.springboot.model.RawDataStore;
 import com.apple.springboot.repository.CleansedDataStoreRepository;
 import com.apple.springboot.repository.EnrichedContentElementRepository;
+import com.apple.springboot.repository.RawDataStoreRepository;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.lang.reflect.Method;
 import java.time.OffsetDateTime;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Deque;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Function;
 
 @Service
 public class EnrichmentReadService {
 
+    private static final Logger logger = LoggerFactory.getLogger(EnrichmentReadService.class);
+    private static final List<String> LOCALE_KEYS = List.of(
+            "locale", "localeCode", "locale_code", "languageLocale", "language_locale"
+    );
+    private static final List<String> PAGE_ID_KEYS = List.of("pageId", "page_id", "pageID");
+    private static final int MAX_METADATA_NODES = 1500;
+
     private final CleansedDataStoreRepository cleansedDataStoreRepository;
     private final EnrichedContentElementRepository enrichedContentElementRepository;
+    private final RawDataStoreRepository rawDataStoreRepository;
+    private final ObjectMapper objectMapper;
 
     /**
      * Creates the read service used by enrichment view endpoints.
      */
     public EnrichmentReadService(CleansedDataStoreRepository cleansedDataStoreRepository,
-                                 EnrichedContentElementRepository enrichedContentElementRepository) {
+                                 EnrichedContentElementRepository enrichedContentElementRepository,
+                                 RawDataStoreRepository rawDataStoreRepository,
+                                 ObjectMapper objectMapper) {
         this.cleansedDataStoreRepository = cleansedDataStoreRepository;
         this.enrichedContentElementRepository = enrichedContentElementRepository;
+        this.rawDataStoreRepository = rawDataStoreRepository;
+        this.objectMapper = objectMapper;
     }
 
     /**
@@ -65,16 +88,215 @@ public class EnrichmentReadService {
     /**
      * Builds response metadata from a cleansed record.
      */
+    public CleansedContextResponse.Metadata describeMetadata(CleansedDataStore store) {
+        return buildMetadata(store);
+    }
+
+    /**
+     * Builds response metadata from a cleansed record.
+     */
     private CleansedContextResponse.Metadata buildMetadata(CleansedDataStore store) {
+        LocalePageId localePageId = resolveLocaleAndPageId(store);
         return CleansedContextResponse.buildMetadata(
                 store.getId(),
                 store.getSourceUri(),
                 null,
                 asEpochMillis(store.getCleansedAt()),
                 store.getVersion(),
-                null
+                null,
+                localePageId.locale(),
+                localePageId.pageId()
         );
     }
+
+    /**
+     * Resolves locale and page ID values from available ingestion metadata.
+     */
+    private LocalePageId resolveLocaleAndPageId(CleansedDataStore store) {
+        LocalePageId fromContext = extractFromItems(store.getCleansedItems());
+        LocalePageId fromMetadata = extractFromRawMetadata(store);
+        String locale = firstNonBlank(fromContext.locale(), fromMetadata.locale());
+        String pageId = firstNonBlank(fromContext.pageId(), fromMetadata.pageId());
+        return new LocalePageId(locale, pageId);
+    }
+
+    /**
+     * Extracts locale and page ID values from stored raw metadata JSON.
+     */
+    private LocalePageId extractFromRawMetadata(CleansedDataStore store) {
+        UUID rawDataId = store.getRawDataId();
+        if (rawDataId == null) {
+            return new LocalePageId(null, null);
+        }
+        Optional<RawDataStore> rawDataOpt = rawDataStoreRepository.findById(rawDataId);
+        if (rawDataOpt.isEmpty()) {
+            return new LocalePageId(null, null);
+        }
+        String metadataJson = rawDataOpt.get().getSourceMetadata();
+        if (metadataJson == null || metadataJson.isBlank()) {
+            return new LocalePageId(null, null);
+        }
+        try {
+            JsonNode node = objectMapper.readTree(metadataJson);
+            return extractLocaleAndPageId(node);
+        } catch (Exception e) {
+            logger.warn("Failed to parse source metadata for locale/pageId extraction. Raw data ID: {}", rawDataId, e);
+            return new LocalePageId(null, null);
+        }
+    }
+
+    /**
+     * Extracts locale and page ID values from cleansed item context maps.
+     */
+    private LocalePageId extractFromItems(List<Map<String, Object>> items) {
+        if (items == null || items.isEmpty()) {
+            return new LocalePageId(null, null);
+        }
+        String locale = null;
+        String pageId = null;
+        for (Map<String, Object> item : items) {
+            if (item == null || (locale != null && pageId != null)) {
+                continue;
+            }
+            Object context = item.get("context");
+            if (context == null) {
+                continue;
+            }
+            LocalePageId candidate = extractLocaleAndPageId(context);
+            if (locale == null) {
+                locale = candidate.locale();
+            }
+            if (pageId == null) {
+                pageId = candidate.pageId();
+            }
+        }
+        return new LocalePageId(locale, pageId);
+    }
+
+    /**
+     * Attempts to extract locale and page ID values from an object tree.
+     */
+    private LocalePageId extractLocaleAndPageId(Object payload) {
+        if (payload == null) {
+            return new LocalePageId(null, null);
+        }
+        JsonNode node = payload instanceof JsonNode
+                ? (JsonNode) payload
+                : objectMapper.valueToTree(payload);
+        return extractLocaleAndPageId(node);
+    }
+
+    /**
+     * Traverses a JsonNode tree to locate locale and page ID values.
+     */
+    private LocalePageId extractLocaleAndPageId(JsonNode payload) {
+        if (payload == null || payload.isNull()) {
+            return new LocalePageId(null, null);
+        }
+        Deque<JsonNode> stack = new ArrayDeque<>();
+        stack.push(payload);
+        Map<JsonNode, Boolean> visited = new IdentityHashMap<>();
+        int scanned = 0;
+        String locale = null;
+        String pageId = null;
+
+        while (!stack.isEmpty() && scanned < MAX_METADATA_NODES && (locale == null || pageId == null)) {
+            JsonNode current = stack.pop();
+            if (current == null || current.isNull() || visited.put(current, Boolean.TRUE) != null) {
+                continue;
+            }
+            scanned += 1;
+            if (current.isObject()) {
+                if (locale == null) {
+                    locale = pickStringKey(current, LOCALE_KEYS, this::normalizeLocale);
+                }
+                if (pageId == null) {
+                    pageId = pickStringKey(current, PAGE_ID_KEYS, Function.identity());
+                }
+                current.fields().forEachRemaining(entry -> {
+                    JsonNode value = entry.getValue();
+                    if (value != null && value.isContainerNode()) {
+                        stack.push(value);
+                    }
+                });
+            } else if (current.isArray()) {
+                current.forEach(entry -> {
+                    if (entry != null && entry.isContainerNode()) {
+                        stack.push(entry);
+                    }
+                });
+            }
+        }
+
+        return new LocalePageId(locale, pageId);
+    }
+
+    /**
+     * Reads the first non-blank string value for the provided keys.
+     */
+    private String pickStringKey(JsonNode node, List<String> keys, Function<String, String> normalizer) {
+        for (String key : keys) {
+            JsonNode valueNode = node.get(key);
+            String value = textOrNull(valueNode);
+            if (value != null) {
+                return normalizer.apply(value);
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Normalizes locale values into the ll_CC format when possible.
+     */
+    private String normalizeLocale(String locale) {
+        if (locale == null) {
+            return null;
+        }
+        String trimmed = locale.trim();
+        if (trimmed.isBlank()) {
+            return null;
+        }
+        String normalized = trimmed.replace('-', '_');
+        if (normalized.length() == 5 && normalized.charAt(2) == '_') {
+            String language = normalized.substring(0, 2).toLowerCase(java.util.Locale.ROOT);
+            String country = normalized.substring(3).toUpperCase(java.util.Locale.ROOT);
+            return language + "_" + country;
+        }
+        return trimmed;
+    }
+
+    /**
+     * Returns the first non-blank string value.
+     */
+    private String firstNonBlank(String first, String second) {
+        if (first != null && !first.isBlank()) {
+            return first;
+        }
+        if (second != null && !second.isBlank()) {
+            return second;
+        }
+        return null;
+    }
+
+    /**
+     * Converts a JsonNode to a trimmed string when possible.
+     */
+    private String textOrNull(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        String value = node.asText(null);
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    /**
+     * Holder for locale and page ID values.
+     */
+    private record LocalePageId(String locale, String pageId) {}
 
     /**
      * Creates a basic status history for the cleansed record.

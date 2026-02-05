@@ -1,5 +1,6 @@
 package com.apple.springboot.controller;
 
+import com.apple.springboot.dto.CleansedContextResponse;
 import com.apple.springboot.dto.CleansedItemRow;
 import com.apple.springboot.dto.CleansedItemsResponse;
 import com.apple.springboot.model.CleansedDataStore;
@@ -484,7 +485,7 @@ public class DataExtractionController {
 
         if ("NO_CONTENT_EXTRACTED".equalsIgnoreCase(currentStatus) || "PROCESSED_EMPTY_ITEMS".equalsIgnoreCase(currentStatus)) {
             logger.info("Processing for {} completed with status: {}. No content for enrichment. CleansedDataID: {}", identifierForLog, currentStatus, cleansedDataStoreId);
-            return buildJsonResponse(HttpStatus.OK, cleansedDataStoreId, currentStatus,
+            return buildJsonResponse(HttpStatus.OK, cleansedDataEntry, currentStatus,
                     "Source processed. No content extracted for enrichment.");
         }
 
@@ -496,7 +497,7 @@ public class DataExtractionController {
         }
 
         logger.info("Cleansing complete for identifier: {}. CleansedDataStore ID: {} is awaiting enrichment trigger.", identifierForLog, cleansedDataStoreId);
-        return buildJsonResponse(HttpStatus.ACCEPTED, cleansedDataStoreId, currentStatus,
+        return buildJsonResponse(HttpStatus.ACCEPTED, cleansedDataEntry, currentStatus,
                 "Cleansing finished. Use POST /api/enrichment/start/" + cleansedDataStoreId + " to trigger enrichment.");
     }
 
@@ -523,8 +524,9 @@ public class DataExtractionController {
     /**
      * Serializes a status response as JSON for consistent API replies.
      */
-    private ResponseEntity<String> buildJsonResponse(HttpStatus status, UUID cleansedDataStoreId, String pipelineStatus, String message) {
+    private ResponseEntity<String> buildJsonResponse(HttpStatus status, CleansedDataStore cleansedDataStore, String pipelineStatus, String message) {
         ObjectNode node = objectMapper.createObjectNode();
+        UUID cleansedDataStoreId = cleansedDataStore != null ? cleansedDataStore.getId() : null;
         if (cleansedDataStoreId != null) {
             node.put("cleansedDataStoreId", cleansedDataStoreId.toString());
         }
@@ -533,6 +535,12 @@ public class DataExtractionController {
         }
         if (message != null) {
             node.put("message", message);
+        }
+        if (cleansedDataStore != null) {
+            CleansedContextResponse.Metadata metadata = enrichmentReadService.describeMetadata(cleansedDataStore);
+            if (metadata != null) {
+                node.set("metadata", objectMapper.valueToTree(metadata));
+            }
         }
         return ResponseEntity.status(status).body(node.toString());
     }

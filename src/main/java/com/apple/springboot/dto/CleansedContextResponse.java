@@ -114,7 +114,9 @@ public class CleansedContextResponse {
                                          String sourceType,
                                          Long uploadedAt,
                                          Integer version,
-                                         Long sizeBytes) {
+                                         Long sizeBytes,
+                                         String locale,
+                                         String pageId) {
         Metadata metadata = new Metadata();
         metadata.setCleansedId(cleansedId != null ? cleansedId.toString() : null);
         metadata.setSource(sourceUri);
@@ -122,6 +124,8 @@ public class CleansedContextResponse {
         metadata.setUploadedAt(uploadedAt);
         metadata.setVersion(version);
         metadata.setSize(sizeBytes);
+        metadata.setLocale(locale);
+        metadata.setPageId(pageId);
         return metadata;
     }
 
@@ -143,6 +147,8 @@ public class CleansedContextResponse {
         private Long uploadedAt;
         private Integer version;
         private Long size;
+        private String locale;
+        private String pageId;
 
         /**
          * Returns the cleansed record ID.
@@ -226,6 +232,34 @@ public class CleansedContextResponse {
          */
         public void setSize(Long size) {
             this.size = size;
+        }
+
+        /**
+         * Returns the locale derived from the source payload.
+         */
+        public String getLocale() {
+            return locale;
+        }
+
+        /**
+         * Sets the locale derived from the source payload.
+         */
+        public void setLocale(String locale) {
+            this.locale = locale;
+        }
+
+        /**
+         * Returns the page identifier associated with the payload.
+         */
+        public String getPageId() {
+            return pageId;
+        }
+
+        /**
+         * Sets the page identifier associated with the payload.
+         */
+        public void setPageId(String pageId) {
+            this.pageId = pageId;
         }
     }
 
